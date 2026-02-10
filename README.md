@@ -18,7 +18,7 @@ pip install -e .
 
 ### Standalone Mode
 
-Run without a hub connection for local domain management:
+Run without an API connection for local domain management:
 
 ```bash
 # Initialize with auto-detected paths
@@ -28,12 +28,12 @@ psa init
 psa init --ps-cfg-home /u01/app/psoft/cfg --domain-user psadm2
 ```
 
-### Hub Mode
+### OPS Mode
 
-Connect to a PSA Ops hub for centralized management:
+Connect to a PSA-OPS instance for centralized management:
 
 ```bash
-psa init --hub-url http://hub.example.com:8000
+psa init --ops-url http://ops.example.com:8000
 ```
 
 ## Commands
@@ -54,14 +54,14 @@ psa domain bounce APPDOM           # Full bounce (stop, purge, flush, configure,
 ```bash
 psa discover                       # Discover domains on this node
 psa discover --json                # Output as JSON
-psa discover --push                # Push to hub (requires hub connection)
+psa discover --push                # Push to API (requires API connection)
 ```
 
-### Hub Integration (when connected)
+### OPS Integration (when connected)
 
 ```bash
-psa hub status                     # Check hub connection
-psa hub environments               # List environments from hub
+psa ops status                     # Check API connection
+psa ops environments               # List environments from API
 ```
 
 ## Configuration
@@ -75,13 +75,13 @@ ps_cfg_home: /u01/app/psoft/cfg
 domain_user: psadm2
 ```
 
-### Example config (with hub):
+### Example config (with OPS):
 
 ```yaml
 ps_cfg_home: /u01/app/psoft/cfg
 domain_user: psadm2
-hub:
-  url: http://hub.example.com:8000
+ops:
+  url: http://ops.example.com:8000
   node_id: abc123...
   environment_id: def456...
 ```
@@ -90,7 +90,7 @@ hub:
 
 - `PS_CFG_HOME` - PeopleSoft config home path
 - `PS_HOME` - PeopleSoft home path
-- `PSA_HUB_URL` - Hub API URL (overrides config file)
+- `PSA_OPS_URL` - API URL (overrides config file)
 
 ## License
 
