@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from psa.core.config import HubConfig, PsaConfig
+from psa.core.config import OpsConfig, PsaConfig
 
 
 # --- Sample config file content ---
@@ -61,5 +61,5 @@ def tmp_cfg_home(tmp_path):
 def mock_config(tmp_cfg_home):
     return PsaConfig(
         ps_cfg_home=tmp_cfg_home,
-        hub=HubConfig(),
+        ops=OpsConfig(),
     )

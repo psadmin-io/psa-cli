@@ -1,4 +1,4 @@
-"""Tests for HubClient compare, drift, and domain methods."""
+"""Tests for ApiClient compare, drift, and domain methods."""
 
 import json
 from io import BytesIO
@@ -6,12 +6,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from psa.core.hub import HubClient, HubError
+from psa.core.api import ApiClient, ApiError
 
 
 @pytest.fixture
 def client():
-    return HubClient(base_url="http://hub:8002")
+    return ApiClient(base_url="http://hub:8002")
 
 
 def _mock_response(data, status=200):
@@ -115,7 +115,7 @@ class TestCompareConfigs:
             url="", code=400, msg="", hdrs=None, fp=error_resp
         )
 
-        with pytest.raises(HubError) as exc:
+        with pytest.raises(ApiError) as exc:
             client.compare_configs(["d1", "d2"])
         assert exc.value.status_code == 400
 

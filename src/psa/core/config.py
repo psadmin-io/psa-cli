@@ -18,8 +18,8 @@ CONFIG_PATH = Path.home() / ".config" / "psa" / "config.yaml"
 
 
 @dataclass
-class HubConfig:
-    """Hub connection configuration."""
+class OpsConfig:
+    """OPS API connection configuration."""
 
     url: Optional[str] = None
     node_id: Optional[str] = None
@@ -35,7 +35,7 @@ class HubConfig:
     suppress_fact_warnings: bool = False
 
     def is_configured(self) -> bool:
-        """Check if hub is configured."""
+        """Check if OPS API is configured."""
         return self.url is not None
 
 
@@ -48,7 +48,7 @@ class PsaConfig:
     ps_cfg_home: Optional[Path] = None
     ps_home: Optional[Path] = None
     domain_user: str = "psadm2"
-    hub: HubConfig = field(default_factory=HubConfig)
+    ops: OpsConfig = field(default_factory=OpsConfig)
     # Domain management settings
     sudo_enabled: bool = True  # Use sudo to run commands as domain_user
     parallel_boot: bool = False  # Use parallelboot instead of boot
@@ -72,12 +72,12 @@ class PsaConfig:
         if io_base := os.environ.get("IO_BASE"):
             config.io_base = Path(io_base)
 
-        # Hub from environment
-        if hub_url := os.environ.get("PSA_HUB_URL"):
-            config.hub.url = hub_url
+        # OPS API from environment
+        if ops_url := os.environ.get("PSA_OPS_URL"):
+            config.ops.url = ops_url
 
         if env_id := os.environ.get("PSA_ENVIRONMENT_ID"):
-            config.hub.environment_id = env_id
+            config.ops.environment_id = env_id
 
         return config
 
@@ -115,22 +115,22 @@ class PsaConfig:
                 if multi_homes := data.get("multi_homes"):
                     config.multi_homes = [Path(p) for p in multi_homes]
 
-                # Hub config (env vars take precedence)
-                if hub_data := data.get("hub"):
-                    if not config.hub.url:
-                        config.hub.url = hub_data.get("url")
-                    if not config.hub.node_id:
-                        config.hub.node_id = hub_data.get("node_id")
-                    if not config.hub.environment_id:
-                        config.hub.environment_id = hub_data.get("environment_id")
-                    config.hub.environment_name = hub_data.get("environment_name")
+                # OPS config (env vars take precedence)
+                if ops_data := data.get("ops"):
+                    if not config.ops.url:
+                        config.ops.url = ops_data.get("url")
+                    if not config.ops.node_id:
+                        config.ops.node_id = ops_data.get("node_id")
+                    if not config.ops.environment_id:
+                        config.ops.environment_id = ops_data.get("environment_id")
+                    config.ops.environment_name = ops_data.get("environment_name")
                     # Environment-level facts
-                    config.hub.tier = hub_data.get("tier")
-                    config.hub.pillar = hub_data.get("pillar")
-                    config.hub.zone = hub_data.get("zone")
+                    config.ops.tier = ops_data.get("tier")
+                    config.ops.pillar = ops_data.get("pillar")
+                    config.ops.zone = ops_data.get("zone")
                     # Node-level facts
-                    config.hub.ps_role = hub_data.get("ps_role")
-                    config.hub.suppress_fact_warnings = hub_data.get(
+                    config.ops.ps_role = ops_data.get("ps_role")
+                    config.ops.suppress_fact_warnings = ops_data.get(
                         "suppress_fact_warnings", False
                     )
 
@@ -168,28 +168,28 @@ class PsaConfig:
         if self.multi_homes:
             data["multi_homes"] = [str(p) for p in self.multi_homes]
 
-        # Hub config
-        if self.hub.url:
-            hub_data = {"url": self.hub.url}
-            if self.hub.node_id:
-                hub_data["node_id"] = self.hub.node_id
-            if self.hub.environment_id:
-                hub_data["environment_id"] = self.hub.environment_id
-            if self.hub.environment_name:
-                hub_data["environment_name"] = self.hub.environment_name
+        # OPS config
+        if self.ops.url:
+            ops_data = {"url": self.ops.url}
+            if self.ops.node_id:
+                ops_data["node_id"] = self.ops.node_id
+            if self.ops.environment_id:
+                ops_data["environment_id"] = self.ops.environment_id
+            if self.ops.environment_name:
+                ops_data["environment_name"] = self.ops.environment_name
             # Environment-level facts
-            if self.hub.tier:
-                hub_data["tier"] = self.hub.tier
-            if self.hub.pillar:
-                hub_data["pillar"] = self.hub.pillar
-            if self.hub.zone:
-                hub_data["zone"] = self.hub.zone
+            if self.ops.tier:
+                ops_data["tier"] = self.ops.tier
+            if self.ops.pillar:
+                ops_data["pillar"] = self.ops.pillar
+            if self.ops.zone:
+                ops_data["zone"] = self.ops.zone
             # Node-level facts
-            if self.hub.ps_role:
-                hub_data["ps_role"] = self.hub.ps_role
-            if self.hub.suppress_fact_warnings:
-                hub_data["suppress_fact_warnings"] = True
-            data["hub"] = hub_data
+            if self.ops.ps_role:
+                ops_data["ps_role"] = self.ops.ps_role
+            if self.ops.suppress_fact_warnings:
+                ops_data["suppress_fact_warnings"] = True
+            data["ops"] = ops_data
 
         with open(path, "w") as f:
             yaml.safe_dump(data, f, default_flow_style=False)

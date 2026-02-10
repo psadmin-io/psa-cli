@@ -826,28 +826,28 @@ def apply(
 
     # Load config for defaults
     config = get_config()
-    hub = config.hub
+    ops = config.ops
 
     # Apply config defaults for unspecified options
     defaulted = []
-    if not env and hub.environment_name:
-        env = hub.environment_name
+    if not env and ops.environment_name:
+        env = ops.environment_name
         defaulted.append(f"env={env}")
-    if not tier and hub.tier:
-        tier = hub.tier
+    if not tier and ops.tier:
+        tier = ops.tier
         defaulted.append(f"tier={tier}")
-    if not pillar and hub.pillar:
-        pillar = hub.pillar
+    if not pillar and ops.pillar:
+        pillar = ops.pillar
         defaulted.append(f"pillar={pillar}")
-    if not zone and hub.zone:
-        zone = hub.zone
+    if not zone and ops.zone:
+        zone = ops.zone
         defaulted.append(f"zone={zone}")
-    if not role and hub.ps_role:
-        role = hub.ps_role
+    if not role and ops.ps_role:
+        role = ops.ps_role
         defaulted.append(f"role={role}")
 
     # Show warning for defaulted values
-    if defaulted and not quiet and not hub.suppress_fact_warnings:
+    if defaulted and not quiet and not ops.suppress_fact_warnings:
         print_warning(f"Using config defaults: {', '.join(defaulted)}")
 
     # Build Facter environment variables
@@ -1327,11 +1327,11 @@ def sync(
         "-s",
         help="psaOps-node source path (or $IO_HOME)",
     ),
-    sync_hub: bool = typer.Option(
+    sync_ops: bool = typer.Option(
         False,
-        "--hub",
+        "--ops",
         "-r",
-        help="Also sync Hiera data from hub",
+        help="Also sync Hiera data from OPS API",
     ),
     tier: Optional[str] = typer.Option(
         None,
@@ -1356,11 +1356,11 @@ def sync(
     Sync all psaOps DPK files to local installation.
 
     Deploys hiera.yaml, site.pp, and io_profile/io_role modules in one command.
-    Optionally syncs Hiera data from hub with --hub flag.
+    Optionally syncs Hiera data from OPS API with --ops flag.
 
     Examples:
         psa dpk sync --dpk-path /opt/oracle/psft/dpk
-        psa dpk sync -d $DPK_BASE/dpk --hub --tier nonprod
+        psa dpk sync -d $DPK_BASE/dpk --ops --tier nonprod
         psa dpk sync --dry-run
     """
     # Resolve DPK path
@@ -1404,10 +1404,10 @@ def sync(
     if not _deploy_module_files(resolved_dpk, resolved_source, dry_run):
         raise typer.Exit(1)
 
-    # Optionally sync hub data
-    if sync_hub:
+    # Optionally sync OPS data
+    if sync_ops:
         console.print()
-        print_info("Syncing Hiera data from hub...")
+        print_info("Syncing Hiera data from OPS...")
         # Import here to avoid circular dependency
         from psa.commands.dpk.data import sync as data_sync
 
@@ -1424,7 +1424,7 @@ def sync(
                 quiet=True,
             )
         except Exception as e:
-            print_warning(f"Hub sync failed: {e}")
+            print_warning(f"OPS sync failed: {e}")
             print_info("Run 'psa dpk data sync' manually to retry")
 
     console.print()
