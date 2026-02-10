@@ -7,14 +7,14 @@ import pytest
 from typer.testing import CliRunner
 
 from psa.cli import app as psa_app
-from psa.core.config import HubConfig, PsaConfig
+from psa.core.config import OpsConfig, PsaConfig
 
 runner = CliRunner()
 
 
 @pytest.fixture
 def hub_config():
-    return PsaConfig(hub=HubConfig(url="http://hub:8002"))
+    return PsaConfig(ops=OpsConfig(url="http://hub:8002"))
 
 
 MOCK_DRIFT_SUMMARY = {
@@ -34,7 +34,7 @@ MOCK_DRIFT_DETAIL = {
 
 class TestDomainDriftSummary:
     @patch("psa.commands.domain.get_config")
-    @patch("psa.commands.domain.HubClient")
+    @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
     def test_summary_happy_path(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
         mock_get_config.return_value = hub_config
@@ -51,7 +51,7 @@ class TestDomainDriftSummary:
         assert "No" in result.output
 
     @patch("psa.commands.domain.get_config")
-    @patch("psa.commands.domain.HubClient")
+    @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
     def test_summary_no_drift(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
         mock_get_config.return_value = hub_config
@@ -68,7 +68,7 @@ class TestDomainDriftSummary:
 
 class TestDomainDriftDetail:
     @patch("psa.commands.domain.get_config")
-    @patch("psa.commands.domain.HubClient")
+    @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
     def test_detail_with_type(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
         mock_get_config.return_value = hub_config
@@ -85,7 +85,7 @@ class TestDomainDriftDetail:
         assert "9200" in result.output
 
     @patch("psa.commands.domain.get_config")
-    @patch("psa.commands.domain.HubClient")
+    @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
     def test_detail_no_changes(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
         mock_get_config.return_value = hub_config
@@ -102,7 +102,7 @@ class TestDomainDriftDetail:
 
 class TestDomainDriftJson:
     @patch("psa.commands.domain.get_config")
-    @patch("psa.commands.domain.HubClient")
+    @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
     def test_json_output(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
         mock_get_config.return_value = hub_config
@@ -121,13 +121,13 @@ class TestDomainDriftJson:
 class TestDomainDriftErrors:
     def test_hub_not_configured(self):
         with patch("psa.commands.domain.get_config") as mock_cfg:
-            mock_cfg.return_value = PsaConfig(hub=HubConfig())
+            mock_cfg.return_value = PsaConfig(ops=OpsConfig())
             result = runner.invoke(psa_app, ["domain", "drift", "APPDOM"])
             assert result.exit_code == 1
-            assert "Hub not configured" in result.output
+            assert "OPS not configured" in result.output
 
     @patch("psa.commands.domain.get_config")
-    @patch("psa.commands.domain.HubClient")
+    @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
     def test_domain_not_found(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
         mock_get_config.return_value = hub_config
@@ -142,17 +142,17 @@ class TestDomainDriftErrors:
         assert "not found" in result.output
 
     @patch("psa.commands.domain.get_config")
-    @patch("psa.commands.domain.HubClient")
+    @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
     def test_hub_error(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
-        from psa.core.hub import HubError
+        from psa.core.api import ApiError
 
         mock_get_config.return_value = hub_config
         mock_cache.return_value = "d1"
 
         mock_client = MagicMock()
         mock_hub_cls.return_value = mock_client
-        mock_client.get_drift_summary.side_effect = HubError("server error", status_code=500)
+        mock_client.get_drift_summary.side_effect = ApiError("server error", status_code=500)
 
         result = runner.invoke(psa_app, ["domain", "drift", "APPDOM"])
         assert result.exit_code == 1

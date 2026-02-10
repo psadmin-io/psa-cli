@@ -8,7 +8,7 @@ from rich.table import Table
 
 from psa.core.config import CONFIG_PATH, PsaConfig, get_config
 from psa.core.domain_cache import get_cached_domain_id
-from psa.core.hub import HubClient, HubError
+from psa.core.api import ApiClient, ApiError
 from psa.core.output import print_error
 
 console = Console()
@@ -22,11 +22,11 @@ app = typer.Typer(
 
 @app.command(name="init")
 def config_init(
-    hub_url: str = typer.Option(
+    ops_url: str = typer.Option(
         ...,
-        "--hub-url",
+        "--ops-url",
         "-r",
-        help="Hub API URL",
+        help="OPS API URL",
     ),
     node_id: str = typer.Option(
         ...,
@@ -42,26 +42,26 @@ def config_init(
     ),
 ) -> None:
     """
-    Initialize config from hub (non-interactive).
+    Initialize config from OPS API (non-interactive).
 
-    Fetches configuration for this node from the hub and writes
+    Fetches configuration for this node from OPS and writes
     it to the local config file. Used for automated setup via Ansible.
 
     Examples:
-        psa config init -r http://hub.psaops.local:8000 -n abc-123-uuid
-        psa config init -r http://hub:8000 -n abc-123-uuid -e env-456-uuid
+        psa config init -r http://ops.psaops.local:8000 -n abc-123-uuid
+        psa config init -r http://ops:8000 -n abc-123-uuid -e env-456-uuid
     """
-    console.print("Fetching config from hub...")
-    console.print(f"  Hub: [cyan]{hub_url}[/cyan]")
+    console.print("Fetching config from OPS...")
+    console.print(f"  OPS: [cyan]{ops_url}[/cyan]")
     console.print(f"  Node ID: [cyan]{node_id[:8]}...[/cyan]")
     if environment_id:
         console.print(f"  Environment ID: [cyan]{environment_id[:8]}...[/cyan]")
 
-    client = HubClient(hub_url)
+    client = ApiClient(ops_url)
 
     try:
         config_yaml = client.get_node_config(node_id, environment_id)
-    except HubError as e:
+    except ApiError as e:
         console.print(f"[red]✗[/red] Failed to fetch config: {e}")
         raise typer.Exit(1)
 
@@ -76,12 +76,12 @@ def config_init(
 
     # Load and display what was written
     config = PsaConfig.load()
-    if config.hub.environment_name:
-        console.print(f"[green]✓[/green] Environment: [cyan]{config.hub.environment_name}[/cyan]")
-    if config.hub.tier:
-        console.print(f"[green]✓[/green] Tier: {config.hub.tier}")
-    if config.hub.ps_role:
-        console.print(f"[green]✓[/green] Role: {config.hub.ps_role}")
+    if config.ops.environment_name:
+        console.print(f"[green]✓[/green] Environment: [cyan]{config.ops.environment_name}[/cyan]")
+    if config.ops.tier:
+        console.print(f"[green]✓[/green] Tier: {config.ops.tier}")
+    if config.ops.ps_role:
+        console.print(f"[green]✓[/green] Role: {config.ops.ps_role}")
 
 
 @app.command(name="show")
@@ -105,31 +105,31 @@ def config_show() -> None:
         console.print(f"  PS_HOME: {config.ps_home}")
     console.print(f"  Domain user: {config.domain_user}")
 
-    if config.hub.is_configured():
-        console.print("\n[bold]Hub:[/bold]")
-        console.print(f"  URL: {config.hub.url}")
-        if config.hub.node_id:
-            console.print(f"  Node ID: {config.hub.node_id[:8]}...")
-        if config.hub.environment_name:
-            console.print(f"  Environment: {config.hub.environment_name}")
-        if config.hub.tier:
-            console.print(f"  Tier: {config.hub.tier}")
-        if config.hub.pillar:
-            console.print(f"  Pillar: {config.hub.pillar}")
-        if config.hub.ps_role:
-            console.print(f"  Role: {config.hub.ps_role}")
+    if config.ops.is_configured():
+        console.print("\n[bold]OPS:[/bold]")
+        console.print(f"  URL: {config.ops.url}")
+        if config.ops.node_id:
+            console.print(f"  Node ID: {config.ops.node_id[:8]}...")
+        if config.ops.environment_name:
+            console.print(f"  Environment: {config.ops.environment_name}")
+        if config.ops.tier:
+            console.print(f"  Tier: {config.ops.tier}")
+        if config.ops.pillar:
+            console.print(f"  Pillar: {config.ops.pillar}")
+        if config.ops.ps_role:
+            console.print(f"  Role: {config.ops.ps_role}")
     else:
-        console.print("\n[yellow]Hub not configured[/yellow]")
+        console.print("\n[yellow]OPS not configured[/yellow]")
 
 
-def _resolve_domain_id(client: HubClient, name: str) -> str:
-    """Resolve domain name to UUID. Checks local cache first, then Hub API."""
+def _resolve_domain_id(client: ApiClient, name: str) -> str:
+    """Resolve domain name to UUID. Checks local cache first, then OPS API."""
     cached = get_cached_domain_id(name)
     if cached:
         return cached
     domain = client.resolve_domain(name)
     if not domain:
-        print_error(f"Domain '{name}' not found in Hub")
+        print_error(f"Domain '{name}' not found in OPS")
         raise typer.Exit(1)
     return domain["id"]
 
@@ -175,11 +175,11 @@ def config_compare(
         raise typer.Exit(1)
 
     config = get_config()
-    if not config.hub.is_configured():
-        print_error("Hub not configured. Run 'psa init' first")
+    if not config.ops.is_configured():
+        print_error("OPS not configured. Run 'psa init' first")
         raise typer.Exit(1)
 
-    client = HubClient(config.hub.url)
+    client = ApiClient(config.ops.url)
 
     # Resolve names to UUIDs
     domain_ids = []
@@ -189,7 +189,7 @@ def config_compare(
 
     try:
         result = client.compare_configs(domain_ids, config_type)
-    except HubError as e:
+    except ApiError as e:
         print_error(f"Compare failed: {e}")
         raise typer.Exit(1)
 

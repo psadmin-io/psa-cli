@@ -12,7 +12,7 @@ from rich.table import Table
 from psa.core.config import get_config
 from psa.core.domain import DomainDiscovery, DomainInfo
 from psa.core.domain_cache import get_cached_domain_id
-from psa.core.hub import HubClient, HubError
+from psa.core.api import ApiClient, ApiError
 from psa.core.output import print_error, print_info, print_success, print_warning
 from psa.core.psadmin import PsadminExecutor, PsadminResult
 
@@ -586,11 +586,11 @@ def reconfigure(
 def set_env(
     domain_id: str = typer.Argument(..., help="Domain ID (from hub)"),
     environment_id: str = typer.Argument(..., help="Environment ID to assign"),
-    hub_url: Optional[str] = typer.Option(
+    ops_url: Optional[str] = typer.Option(
         None,
-        "--hub-url",
-        envvar="PSA_HUB_URL",
-        help="Hub API URL (or uses saved config from psa init)",
+        "--ops-url",
+        envvar="PSA_OPS_URL",
+        help="OPS API URL (or uses saved config from psa init)",
     ),
 ) -> None:
     """
@@ -598,19 +598,19 @@ def set_env(
 
     Examples:
         psa domain set-env abc123 def456
-        psa domain set-env abc123 def456 --hub-url http://hub:8002
+        psa domain set-env abc123 def456 --ops-url http://ops:8002
     """
     config = get_config()
 
-    effective_hub_url = hub_url
-    if not effective_hub_url:
-        if config.hub.is_configured():
-            effective_hub_url = config.hub.url
+    effective_ops_url = ops_url
+    if not effective_ops_url:
+        if config.ops.is_configured():
+            effective_ops_url = config.ops.url
         else:
-            print_error("Hub not configured. Run 'psa init' first or use --hub-url")
+            print_error("OPS not configured. Run 'psa init' first or use --ops-url")
             raise typer.Exit(1)
 
-    url = f"{effective_hub_url.rstrip('/')}/api/v1/domains/{domain_id}"
+    url = f"{effective_ops_url.rstrip('/')}/api/v1/domains/{domain_id}"
     payload = {"environment_id": environment_id}
 
     data = json.dumps(payload).encode("utf-8")
@@ -638,14 +638,14 @@ def set_env(
         raise typer.Exit(1)
 
 
-def _resolve_hub_domain_id(client: HubClient, name: str) -> str:
-    """Resolve domain name to UUID via cache then Hub API."""
+def _resolve_api_domain_id(client: ApiClient, name: str) -> str:
+    """Resolve domain name to UUID via cache then OPS API."""
     cached = get_cached_domain_id(name)
     if cached:
         return cached
     domain = client.resolve_domain(name)
     if not domain:
-        print_error(f"Domain '{name}' not found in Hub")
+        print_error(f"Domain '{name}' not found in OPS")
         raise typer.Exit(1)
     return domain["id"]
 
@@ -677,19 +677,19 @@ def drift(
         psa domain drift APPDOM --type psappsrv.cfg
     """
     config = get_config()
-    if not config.hub.is_configured():
-        print_error("Hub not configured. Run 'psa init' first")
+    if not config.ops.is_configured():
+        print_error("OPS not configured. Run 'psa init' first")
         raise typer.Exit(1)
 
-    client = HubClient(config.hub.url)
-    domain_id = _resolve_hub_domain_id(client, name)
+    client = ApiClient(config.ops.url)
+    domain_id = _resolve_api_domain_id(client, name)
 
     try:
         if config_type:
             result = client.get_domain_drift(domain_id, config_type)
         else:
             result = client.get_drift_summary(domain_id)
-    except HubError as e:
+    except ApiError as e:
         print_error(f"Drift check failed: {e}")
         raise typer.Exit(1)
 

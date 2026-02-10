@@ -17,14 +17,14 @@ from psa.core.output import print_domains_table, print_error, print_json, print_
 console = Console()
 
 
-def _push_to_hub(
-    hub_url: str,
+def _push_to_api(
+    ops_url: str,
     hostname: str,
     domains: list,
     environment_id: Optional[str] = None,
 ) -> dict:
-    """Push discovery results to Hub API."""
-    url = f"{hub_url.rstrip('/')}/api/v1/scan/ingest"
+    """Push discovery results to OPS API."""
+    url = f"{ops_url.rstrip('/')}/api/v1/scan/ingest"
     if environment_id:
         url += f"?environment_id={environment_id}"
 
@@ -85,13 +85,13 @@ def discover(
         False,
         "--push",
         "-p",
-        help="Push results to hub (uses saved config from psa init)",
+        help="Push results to OPS API (uses saved config from psa init)",
     ),
-    hub_url: Optional[str] = typer.Option(
+    ops_url: Optional[str] = typer.Option(
         None,
-        "--hub-url",
-        envvar="PSA_HUB_URL",
-        help="Push results to Hub API (e.g., http://hub:8002)",
+        "--ops-url",
+        envvar="PSA_OPS_URL",
+        help="Push results to OPS API (e.g., http://ops:8002)",
     ),
     environment_id: Optional[str] = typer.Option(
         None,
@@ -114,7 +114,7 @@ def discover(
         psa discover --type app
         psa discover --ps-cfg-home /u01/app/psoft/cfg
         psa discover --push
-        psa discover --hub-url http://hub:8002
+        psa discover --ops-url http://ops:8002
     """
     # Build config
     config = get_config()
@@ -152,25 +152,25 @@ def discover(
     # Convert to dicts for output
     domain_dicts = [d.to_dict() for d in domains]
 
-    # Determine hub URL (--push uses saved config)
-    effective_hub_url = hub_url
+    # Determine OPS URL (--push uses saved config)
+    effective_ops_url = ops_url
     effective_env_id = environment_id
 
-    if push and not hub_url:
-        if config.hub.is_configured():
-            effective_hub_url = config.hub.url
+    if push and not ops_url:
+        if config.ops.is_configured():
+            effective_ops_url = config.ops.url
             if not effective_env_id:
-                effective_env_id = config.hub.environment_id
+                effective_env_id = config.ops.environment_id
         else:
-            print_error("Hub not configured. Run 'psa init' first or use --hub-url")
+            print_error("OPS not configured. Run 'psa init' first or use --ops-url")
             raise typer.Exit(1)
 
-    # Push to hub if URL provided
-    if effective_hub_url:
+    # Push to OPS API if URL provided
+    if effective_ops_url:
         hostname = socket.gethostname()
         try:
-            result = _push_to_hub(
-                effective_hub_url, hostname, domain_dicts, effective_env_id
+            result = _push_to_api(
+                effective_ops_url, hostname, domain_dicts, effective_env_id
             )
 
             if result.get("errors"):
@@ -182,10 +182,10 @@ def discover(
             updated = result.get("domains_updated", 0)
             unchanged = result.get("domains_unchanged", 0)
             print_success(
-                f"Pushed to hub: {created} created, {updated} updated, {unchanged} unchanged"
+                f"Pushed to OPS: {created} created, {updated} updated, {unchanged} unchanged"
             )
 
-            # Cache domain UUIDs from ingest response (if Hub returns them)
+            # Cache domain UUIDs from ingest response (if API returns them)
             if result.get("domains"):
                 update_cache_from_ingest(result)
 
@@ -194,7 +194,7 @@ def discover(
             return
 
         except RuntimeError as e:
-            print_error(f"Hub push failed: {e}")
+            print_error(f"OPS push failed: {e}")
             raise typer.Exit(1)
 
     # Remove config from output unless verbose

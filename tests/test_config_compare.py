@@ -7,7 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from psa.cli import app as psa_app
-from psa.core.config import HubConfig, PsaConfig
+from psa.core.config import OpsConfig, PsaConfig
 
 runner = CliRunner()
 
@@ -22,12 +22,12 @@ MOCK_COMPARE_RESULT = {
 
 @pytest.fixture
 def hub_config():
-    return PsaConfig(hub=HubConfig(url="http://hub:8002"))
+    return PsaConfig(ops=OpsConfig(url="http://hub:8002"))
 
 
 class TestConfigCompare:
     @patch("psa.commands.config.get_config")
-    @patch("psa.commands.config.HubClient")
+    @patch("psa.commands.config.ApiClient")
     @patch("psa.commands.config.get_cached_domain_id")
     def test_compare_happy_path(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
         mock_get_config.return_value = hub_config
@@ -48,7 +48,7 @@ class TestConfigCompare:
         assert "1 missing" in result.output
 
     @patch("psa.commands.config.get_config")
-    @patch("psa.commands.config.HubClient")
+    @patch("psa.commands.config.ApiClient")
     @patch("psa.commands.config.get_cached_domain_id")
     def test_compare_all_flag(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
         mock_get_config.return_value = hub_config
@@ -64,7 +64,7 @@ class TestConfigCompare:
         assert "DBName" in result.output
 
     @patch("psa.commands.config.get_config")
-    @patch("psa.commands.config.HubClient")
+    @patch("psa.commands.config.ApiClient")
     @patch("psa.commands.config.get_cached_domain_id")
     def test_compare_json_output(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
         mock_get_config.return_value = hub_config
@@ -88,13 +88,13 @@ class TestConfigCompare:
 
     def test_compare_hub_not_configured(self):
         with patch("psa.commands.config.get_config") as mock_cfg:
-            mock_cfg.return_value = PsaConfig(hub=HubConfig())
+            mock_cfg.return_value = PsaConfig(ops=OpsConfig())
             result = runner.invoke(psa_app, ["config", "compare", "A", "B"])
             assert result.exit_code == 1
-            assert "Hub not configured" in result.output
+            assert "OPS not configured" in result.output
 
     @patch("psa.commands.config.get_config")
-    @patch("psa.commands.config.HubClient")
+    @patch("psa.commands.config.ApiClient")
     @patch("psa.commands.config.get_cached_domain_id")
     def test_compare_with_type_flag(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
         mock_get_config.return_value = hub_config
@@ -109,7 +109,7 @@ class TestConfigCompare:
         mock_client.compare_configs.assert_called_once_with(["d1", "d2"], "psappsrv.cfg")
 
     @patch("psa.commands.config.get_config")
-    @patch("psa.commands.config.HubClient")
+    @patch("psa.commands.config.ApiClient")
     @patch("psa.commands.config.get_cached_domain_id")
     def test_compare_resolves_via_api_on_cache_miss(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
         mock_get_config.return_value = hub_config
