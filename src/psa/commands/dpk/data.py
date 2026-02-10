@@ -4,7 +4,7 @@ import typer
 from pathlib import Path
 from typing import Optional
 from psa.core.config import get_config
-from psa.core.hub import HubClient
+from psa.core.api import ApiClient
 from psa.core.output import print_error, print_success, print_info, print_warning
 
 app = typer.Typer(
@@ -28,9 +28,9 @@ def sync(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress config default warnings"),
 ):
     """
-    Sync Hiera YAMLs from hub to local Hiera paths.
+    Sync Hiera YAMLs from OPS API to local Hiera paths.
 
-    Pulls tier and environment YAMLs from hub and writes to:
+    Pulls tier and environment YAMLs from OPS API and writes to:
     - {hiera_path}/tier/{tier}.yaml
     - {hiera_path}/env/{environment}.yaml
 
@@ -40,36 +40,36 @@ def sync(
         psa dpk data sync --tier DEV --environments HRDEV --hiera-path /tmp/hiera/cust
     """
 
-    # Get config and connect to hub
+    # Get config and connect to OPS
     config = get_config()
-    if not config.hub.is_configured():
-        print_error("Hub not configured. Run 'psa init' first")
+    if not config.ops.is_configured():
+        print_error("OPS not configured. Run 'psa init' first")
         raise typer.Exit(1)
 
-    hub = config.hub
+    ops = config.ops
 
     # Apply config defaults for unspecified options
     defaulted = []
-    if not tier and hub.tier:
-        tier = hub.tier
+    if not tier and ops.tier:
+        tier = ops.tier
         defaulted.append(f"tier={tier}")
-    if not environments and hub.environment_name:
-        environments = hub.environment_name
+    if not environments and ops.environment_name:
+        environments = ops.environment_name
         defaulted.append(f"environments={environments}")
 
     # Show warning for defaulted values
-    if defaulted and not quiet and not hub.suppress_fact_warnings:
+    if defaulted and not quiet and not ops.suppress_fact_warnings:
         print_warning(f"Using config defaults: {', '.join(defaulted)}")
 
     if not tier and not environments:
         print_error("Specify --tier and/or --environments (or run 'psa init' to set defaults)")
         raise typer.Exit(1)
 
-    client = HubClient(config.hub.url)
+    client = ApiClient(config.ops.url)
     try:
         client.health()
     except Exception:
-        print_error("Hub not available")
+        print_error("OPS not available")
         raise typer.Exit(1)
 
     # Call sync API
@@ -125,7 +125,7 @@ def get(
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file (or stdout)"),
 ):
     """
-    Get single YAML from hub.
+    Get single YAML from OPS API.
 
     Examples:
         psa dpk data get tier DEV
@@ -136,13 +136,13 @@ def get(
         print_error(f"Invalid level: {level} (must be 'tier' or 'environment')")
         raise typer.Exit(1)
 
-    # Get config and connect to hub
+    # Get config and connect to OPS
     config = get_config()
-    if not config.hub.is_configured():
-        print_error("Hub not configured. Run 'psa init' first")
+    if not config.ops.is_configured():
+        print_error("OPS not configured. Run 'psa init' first")
         raise typer.Exit(1)
 
-    client = HubClient(config.hub.url)
+    client = ApiClient(config.ops.url)
 
     try:
         if level == 'tier':
@@ -172,9 +172,9 @@ def import_data(
     no_replace: bool = typer.Option(False, "--no-replace", help="Don't delete existing values (merge mode)"),
 ):
     """
-    Import YAML file into hub.
+    Import YAML file into OPS.
 
-    Parses YAML and upserts config values to hub database.
+    Parses YAML and upserts config values to OPS database.
     By default, replaces all existing config for the level+key.
 
     Examples:
@@ -190,13 +190,13 @@ def import_data(
         print_error(f"File not found: {file}")
         raise typer.Exit(1)
 
-    # Get config and connect to hub
+    # Get config and connect to OPS
     config = get_config()
-    if not config.hub.is_configured():
-        print_error("Hub not configured. Run 'psa init' first")
+    if not config.ops.is_configured():
+        print_error("OPS not configured. Run 'psa init' first")
         raise typer.Exit(1)
 
-    client = HubClient(config.hub.url)
+    client = ApiClient(config.ops.url)
 
     # Read YAML file
     try:

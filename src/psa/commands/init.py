@@ -15,11 +15,11 @@ console = Console()
 
 
 def init(
-    hub_url: Optional[str] = typer.Option(
+    ops_url: Optional[str] = typer.Option(
         None,
-        "--hub-url",
+        "--ops-url",
         "-r",
-        help="Hub API URL (e.g., http://hub.psaops.local:8000). If omitted, runs in standalone mode.",
+        help="OPS API URL (e.g., http://ops.psaops.local:8000). If omitted, runs in standalone mode.",
     ),
     ps_cfg_home: Optional[str] = typer.Option(
         None,
@@ -37,7 +37,7 @@ def init(
         None,
         "--environment-id",
         "-e",
-        help="Environment ID (hub mode only, skips auto-detection)",
+        help="Environment ID (ops mode only, skips auto-detection)",
     ),
     non_interactive: bool = typer.Option(
         False,
@@ -49,21 +49,21 @@ def init(
     """
     Initialize psa configuration.
 
-    Standalone mode (no --hub-url):
+    Standalone mode (no --ops-url):
         Configures local paths and discovers domains.
 
-    Hub mode (with --hub-url):
-        Connects to hub, registers node, and saves connection config.
+    OPS mode (with --ops-url):
+        Connects to OPS API, registers node, and saves connection config.
 
     Examples:
         psa init                                    # Standalone, auto-detect paths
         psa init --ps-cfg-home /u01/app/psoft/cfg   # Standalone, explicit path
-        psa init --hub-url http://hub:8000          # Hub mode
+        psa init --ops-url http://ops:8000          # OPS mode
     """
     config = get_config()
 
-    if hub_url:
-        _init_hub_mode(config, hub_url, environment_id, non_interactive)
+    if ops_url:
+        _init_ops_mode(config, ops_url, environment_id, non_interactive)
     else:
         _init_standalone_mode(config, ps_cfg_home, domain_user, non_interactive)
 
@@ -74,7 +74,7 @@ def _init_standalone_mode(
     domain_user: Optional[str],
     non_interactive: bool,
 ) -> None:
-    """Initialize in standalone mode (no hub connection)."""
+    """Initialize in standalone mode (no OPS connection)."""
     console.print("[bold]Initializing psa (standalone mode)[/bold]\n")
 
     # Configure PS_CFG_HOME
@@ -124,43 +124,43 @@ def _init_standalone_mode(
     console.print("  [cyan]psa discover[/cyan]      List domains")
     console.print("  [cyan]psa domain status[/cyan] Check domain status")
     console.print("  [cyan]psa domain start[/cyan]  Start a domain")
-    console.print("\nTo connect to a hub later:")
-    console.print("  [cyan]psa init --hub-url http://hub:8000[/cyan]")
+    console.print("\nTo connect to OPS later:")
+    console.print("  [cyan]psa init --ops-url http://ops:8000[/cyan]")
 
 
-def _init_hub_mode(
+def _init_ops_mode(
     config,
-    hub_url: str,
+    ops_url: str,
     environment_id: Optional[str],
     non_interactive: bool,
 ) -> None:
-    """Initialize with hub connection."""
-    from psa.core.hub import HubClient, HubError, get_hostname, get_ip_address
+    """Initialize with OPS API connection."""
+    from psa.core.api import ApiClient, ApiError, get_hostname, get_ip_address
 
     hostname = get_hostname()
     console.print(f"[bold]Initializing psa for [cyan]{hostname}[/cyan][/bold]\n")
 
-    # Test hub connection
-    console.print(f"Connecting to hub: {hub_url}")
-    client = HubClient(hub_url)
+    # Test OPS connection
+    console.print(f"Connecting to OPS: {ops_url}")
+    client = ApiClient(ops_url)
 
     try:
         health = client.health()
-        console.print(f"[green]✓[/green] Hub connected (v{health.get('version', '?')})\n")
-    except HubError as e:
-        console.print(f"[red]✗[/red] Hub connection failed: {e}")
+        console.print(f"[green]✓[/green] OPS connected (v{health.get('version', '?')})\n")
+    except ApiError as e:
+        console.print(f"[red]✗[/red] OPS connection failed: {e}")
         raise typer.Exit(1)
 
     # Fetch environments
     try:
         environments = client.list_environments()
-    except HubError as e:
+    except ApiError as e:
         console.print(f"[red]✗[/red] Failed to fetch environments: {e}")
         raise typer.Exit(1)
 
     if not environments:
-        console.print("[red]✗[/red] No environments found in hub")
-        console.print("Create an environment in the hub UI first")
+        console.print("[red]✗[/red] No environments found in OPS")
+        console.print("Create an environment in the OPS UI first")
         raise typer.Exit(1)
 
     # Build environment lookup by db_name
@@ -281,19 +281,19 @@ def _init_hub_mode(
             )
             node_id = node["id"]
             console.print(f"[green]✓[/green] Node registered: {node_id[:8]}...")
-        except HubError as e:
+        except ApiError as e:
             console.print(f"[red]✗[/red] Failed to register node: {e}")
             raise typer.Exit(1)
 
     # Save config
-    config.hub.url = hub_url
-    config.hub.node_id = node_id
-    config.hub.environment_id = selected_env["id"]
-    config.hub.environment_name = selected_env["name"]
-    config.hub.tier = selected_env.get("tier")
-    config.hub.pillar = selected_env.get("pillar")
-    config.hub.zone = selected_env.get("zone")
-    config.hub.ps_role = ps_role
+    config.ops.url = ops_url
+    config.ops.node_id = node_id
+    config.ops.environment_id = selected_env["id"]
+    config.ops.environment_name = selected_env["name"]
+    config.ops.tier = selected_env.get("tier")
+    config.ops.pillar = selected_env.get("pillar")
+    config.ops.zone = selected_env.get("zone")
+    config.ops.ps_role = ps_role
     config.save()
 
     console.print(f"\n[green]✓[/green] Configuration saved to [cyan]{CONFIG_PATH}[/cyan]")
@@ -306,5 +306,5 @@ def _init_hub_mode(
     )
 
     console.print("\nYou can now use:")
-    console.print("  [cyan]psa discover --push[/cyan]  Push domains to hub")
-    console.print("  [cyan]psa hub status[/cyan]       Check connection status")
+    console.print("  [cyan]psa discover --push[/cyan]  Push domains to OPS")
+    console.print("  [cyan]psa ops status[/cyan]       Check connection status")

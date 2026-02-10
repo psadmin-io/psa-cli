@@ -1,18 +1,19 @@
-"""Hub API client for psa tools."""
+"""OPS API client for psa tools."""
 
 from __future__ import annotations
 
 import json
 import socket
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 
 @dataclass
-class HubClient:
-    """Client for interacting with psaOps Hub API."""
+class ApiClient:
+    """Client for interacting with psa-ops API."""
 
     base_url: str
     timeout: int = 30
@@ -24,7 +25,7 @@ class HubClient:
         data: Optional[dict] = None,
         params: Optional[dict] = None,
     ) -> dict:
-        """Make HTTP request to hub API."""
+        """Make HTTP request to OPS API."""
         url = f"{self.base_url.rstrip('/')}{path}"
 
         if params:
@@ -51,14 +52,14 @@ class HubClient:
             try:
                 error_data = json.loads(error_body)
                 detail = error_data.get("detail", str(e))
-                raise HubError(f"{detail}", status_code=e.code)
+                raise ApiError(f"{detail}", status_code=e.code)
             except json.JSONDecodeError:
-                raise HubError(f"HTTP {e.code}: {error_body or str(e)}", status_code=e.code)
+                raise ApiError(f"HTTP {e.code}: {error_body or str(e)}", status_code=e.code)
         except urllib.error.URLError as e:
-            raise HubError(f"Connection failed: {e.reason}")
+            raise ApiError(f"Connection failed: {e.reason}")
 
     def health(self) -> dict:
-        """Check hub health."""
+        """Check API health."""
         return self._request("GET", "/health")
 
     def list_environments(self) -> list[dict]:
@@ -106,7 +107,7 @@ class HubClient:
         environment_id: Optional[str] = None,
         scan_source: str = "psa-discover",
     ) -> dict:
-        """Push discovery results to hub."""
+        """Push discovery results to OPS API."""
         data = {
             "hostname": hostname,
             "domains": domains,
@@ -116,7 +117,7 @@ class HubClient:
         return self._request("POST", "/api/v1/scan/ingest", data=data, params=params)
 
     def get_tier_yaml(self, tier: str) -> str:
-        """Get tier-level YAML from hub."""
+        """Get tier-level YAML from OPS API."""
         url = f"{self.base_url.rstrip('/')}/api/v1/yaml/tier/{tier}"
         req = urllib.request.Request(url, method="GET")
         try:
@@ -124,12 +125,12 @@ class HubClient:
                 return response.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             error_body = e.read().decode("utf-8") if e.fp else ""
-            raise HubError(f"HTTP {e.code}: {error_body or str(e)}", status_code=e.code)
+            raise ApiError(f"HTTP {e.code}: {error_body or str(e)}", status_code=e.code)
         except urllib.error.URLError as e:
-            raise HubError(f"Connection failed: {e.reason}")
+            raise ApiError(f"Connection failed: {e.reason}")
 
     def get_environment_yaml(self, environment: str) -> str:
-        """Get environment-level YAML from hub."""
+        """Get environment-level YAML from OPS API."""
         url = f"{self.base_url.rstrip('/')}/api/v1/yaml/environment/{environment}"
         req = urllib.request.Request(url, method="GET")
         try:
@@ -137,9 +138,9 @@ class HubClient:
                 return response.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             error_body = e.read().decode("utf-8") if e.fp else ""
-            raise HubError(f"HTTP {e.code}: {error_body or str(e)}", status_code=e.code)
+            raise ApiError(f"HTTP {e.code}: {error_body or str(e)}", status_code=e.code)
         except urllib.error.URLError as e:
-            raise HubError(f"Connection failed: {e.reason}")
+            raise ApiError(f"Connection failed: {e.reason}")
 
     def get_node_config(self, node_id: str, environment_id: Optional[str] = None) -> str:
         """Get psa config YAML for a node.
@@ -160,12 +161,12 @@ class HubClient:
                 return response.read().decode("utf-8")
         except urllib.error.HTTPError as e:
             error_body = e.read().decode("utf-8") if e.fp else ""
-            raise HubError(f"HTTP {e.code}: {error_body or str(e)}", status_code=e.code)
+            raise ApiError(f"HTTP {e.code}: {error_body or str(e)}", status_code=e.code)
         except urllib.error.URLError as e:
-            raise HubError(f"Connection failed: {e.reason}")
+            raise ApiError(f"Connection failed: {e.reason}")
 
     def sync_yaml(self, tier: Optional[str] = None, environments: Optional[str] = None) -> dict:
-        """Sync YAMLs from hub. Returns dict of {path: yaml_content}."""
+        """Sync YAMLs from OPS API. Returns dict of {path: yaml_content}."""
         params = {}
         if tier:
             params['tier'] = tier
@@ -180,7 +181,7 @@ class HubClient:
         yaml_content: str,
         replace_all: bool = True
     ) -> dict:
-        """Import YAML content to hub.
+        """Import YAML content to OPS API.
 
         Args:
             level: "tier" or "environment"
@@ -211,21 +212,83 @@ class HubClient:
             try:
                 error_data = json.loads(error_body)
                 detail = error_data.get("detail", str(e))
-                raise HubError(f"{detail}", status_code=e.code)
+                raise ApiError(f"{detail}", status_code=e.code)
             except json.JSONDecodeError:
-                raise HubError(f"HTTP {e.code}: {error_body or str(e)}", status_code=e.code)
+                raise ApiError(f"HTTP {e.code}: {error_body or str(e)}", status_code=e.code)
         except urllib.error.URLError as e:
-            raise HubError(f"Connection failed: {e.reason}")
+            raise ApiError(f"Connection failed: {e.reason}")
 
-# REMOVED: generate_from_environment method
-# Deferred to future iteration - see issue #56
+    def list_domains(
+        self,
+        name: Optional[str] = None,
+        node_id: Optional[str] = None,
+    ) -> List[dict]:
+        """List domains, optionally filtered by name and/or node."""
+        params = {}
+        if name:
+            params["name"] = name
+        if node_id:
+            params["node_id"] = node_id
+        return self._request("GET", "/api/v1/domains", params=params or None)
 
-# REMOVED: generate_from_environments method (bulk generation)
-# Deferred to issue #49 for future implementation
+    def resolve_domain(self, name: str, node_id: Optional[str] = None) -> Optional[dict]:
+        """Resolve a domain name to an API domain record.
+
+        Uses name filter on GET /api/v1/domains. Returns the first match
+        or None if no domain found.
+        """
+        domains = self.list_domains(name=name, node_id=node_id)
+        if domains:
+            return domains[0]
+        return None
+
+    def compare_configs(
+        self,
+        domain_ids: List[str],
+        config_type: Optional[str] = None,
+    ) -> dict:
+        """Compare configs across domains.
+
+        Args:
+            domain_ids: List of domain UUIDs to compare
+            config_type: Config file type (e.g. psappsrv.cfg)
+
+        Returns:
+            Comparison result from OPS API
+        """
+        query_parts = [
+            ("domain_ids", did) for did in domain_ids
+        ]
+        if config_type:
+            query_parts.append(("config_type", config_type))
+        qs = urllib.parse.urlencode(query_parts)
+        return self._request("GET", f"/api/v1/configs/compare?{qs}")
+
+    def get_domain_drift(
+        self,
+        domain_id: str,
+        config_type: Optional[str] = None,
+    ) -> dict:
+        """Get drift details for a domain.
+
+        Args:
+            domain_id: Domain UUID
+            config_type: Optional config file type filter
+        """
+        params = {}
+        if config_type:
+            params["config_type"] = config_type
+        return self._request(
+            "GET", f"/api/v1/domains/{domain_id}/drift", params=params or None
+        )
+
+    def get_drift_summary(self, domain_id: str) -> dict:
+        """Get drift summary across all config types for a domain."""
+        return self._request("GET", f"/api/v1/domains/{domain_id}/drift/summary")
 
 
-class HubError(Exception):
-    """Error from hub API."""
+class ApiError(Exception):
+    """Error from OPS API."""
 
     def __init__(self, message: str, status_code: Optional[int] = None):
         super().__init__(message)

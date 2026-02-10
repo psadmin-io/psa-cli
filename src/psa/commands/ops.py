@@ -1,4 +1,4 @@
-"""Hub management commands."""
+"""OPS management commands."""
 
 from typing import Optional
 
@@ -9,72 +9,72 @@ from rich.table import Table
 from psa.core.config import CONFIG_PATH, get_config
 from psa.core.domain import DomainDiscovery
 from psa.core.output import print_error, print_success
-from psa.core.hub import HubClient, HubError, get_hostname, get_ip_address
+from psa.core.api import ApiClient, ApiError, get_hostname, get_ip_address
 
 console = Console()
 
 app = typer.Typer(
-    name="hub",
-    help="Manage hub connection and data",
+    name="ops",
+    help="Manage OPS API connection and data",
     no_args_is_help=True,
 )
 
 
 @app.command(name="status")
 def status() -> None:
-    """Show hub configuration and connection status."""
+    """Show OPS API configuration and connection status."""
     config = get_config()
 
-    console.print("[bold]Hub Configuration[/bold]\n")
+    console.print("[bold]OPS Configuration[/bold]\n")
 
-    if not config.hub.is_configured():
+    if not config.ops.is_configured():
         console.print("[yellow]Not configured[/yellow]")
-        console.print("\nRun [cyan]psa init --hub-url <url>[/cyan] to configure")
+        console.print("\nRun [cyan]psa init --ops-url <url>[/cyan] to configure")
         return
 
     console.print(f"Config file: [cyan]{CONFIG_PATH}[/cyan]")
-    console.print(f"Hub URL: [cyan]{config.hub.url}[/cyan]")
+    console.print(f"OPS URL: [cyan]{config.ops.url}[/cyan]")
 
-    if config.hub.node_id:
-        console.print(f"Node ID: [cyan]{config.hub.node_id[:8]}...[/cyan]")
-    if config.hub.environment_name:
-        console.print(f"Environment: [cyan]{config.hub.environment_name}[/cyan]")
-    if config.hub.environment_id:
-        console.print(f"Environment ID: [dim]{config.hub.environment_id[:8]}...[/dim]")
+    if config.ops.node_id:
+        console.print(f"Node ID: [cyan]{config.ops.node_id[:8]}...[/cyan]")
+    if config.ops.environment_name:
+        console.print(f"Environment: [cyan]{config.ops.environment_name}[/cyan]")
+    if config.ops.environment_id:
+        console.print(f"Environment ID: [dim]{config.ops.environment_id[:8]}...[/dim]")
 
     # Test connection
     console.print("\n[bold]Connection Status[/bold]")
-    client = HubClient(config.hub.url)
+    client = ApiClient(config.ops.url)
     try:
         health = client.health()
         console.print(f"[green]✓[/green] Connected (v{health.get('version', '?')})")
 
         # Verify node still exists
-        if config.hub.node_id:
+        if config.ops.node_id:
             node = client.get_node_by_hostname(get_hostname())
             if node:
                 console.print("[green]✓[/green] Node verified")
             else:
-                console.print("[yellow]![/yellow] Node not found in hub")
-    except HubError as e:
+                console.print("[yellow]![/yellow] Node not found in OPS")
+    except ApiError as e:
         console.print(f"[red]✗[/red] Connection failed: {e}")
 
 
 @app.command(name="environments")
 def list_environments() -> None:
-    """List environments from hub."""
+    """List environments from OPS API."""
     config = get_config()
 
-    if not config.hub.is_configured():
-        console.print("[red]Hub not configured[/red]")
-        console.print("Run [cyan]psa init --hub-url <url>[/cyan] first")
+    if not config.ops.is_configured():
+        console.print("[red]OPS not configured[/red]")
+        console.print("Run [cyan]psa init --ops-url <url>[/cyan] first")
         raise typer.Exit(1)
 
-    client = HubClient(config.hub.url)
+    client = ApiClient(config.ops.url)
 
     try:
         environments = client.list_environments()
-    except HubError as e:
+    except ApiError as e:
         console.print(f"[red]Failed to fetch environments:[/red] {e}")
         raise typer.Exit(1)
 
@@ -93,7 +93,7 @@ def list_environments() -> None:
     for env in environments:
         # Mark current environment
         name = env["name"]
-        if env["id"] == config.hub.environment_id:
+        if env["id"] == config.ops.environment_id:
             name = f"[green]{name} ✓[/green]"
 
         table.add_row(
@@ -110,19 +110,19 @@ def list_environments() -> None:
 
 @app.command(name="nodes")
 def list_nodes() -> None:
-    """List nodes from hub."""
+    """List nodes from OPS API."""
     config = get_config()
 
-    if not config.hub.is_configured():
-        console.print("[red]Hub not configured[/red]")
-        console.print("Run [cyan]psa init --hub-url <url>[/cyan] first")
+    if not config.ops.is_configured():
+        console.print("[red]OPS not configured[/red]")
+        console.print("Run [cyan]psa init --ops-url <url>[/cyan] first")
         raise typer.Exit(1)
 
-    client = HubClient(config.hub.url)
+    client = ApiClient(config.ops.url)
 
     try:
         nodes = client.list_nodes()
-    except HubError as e:
+    except ApiError as e:
         console.print(f"[red]Failed to fetch nodes:[/red] {e}")
         raise typer.Exit(1)
 
@@ -167,28 +167,28 @@ def register(
         help="Environment ID (uses saved config if not provided)",
     ),
 ) -> None:
-    """Register or re-register this node with the hub."""
+    """Register or re-register this node with OPS."""
     config = get_config()
     hostname = get_hostname()
 
-    if not config.hub.is_configured():
-        console.print("[red]Hub not configured[/red]")
-        console.print("Run [cyan]psa init --hub-url <url>[/cyan] first")
+    if not config.ops.is_configured():
+        console.print("[red]OPS not configured[/red]")
+        console.print("Run [cyan]psa init --ops-url <url>[/cyan] first")
         raise typer.Exit(1)
 
-    env_id = environment_id or config.hub.environment_id
+    env_id = environment_id or config.ops.environment_id
     if not env_id:
         console.print("[red]No environment ID[/red]")
         console.print("Use --environment-id or run [cyan]psa init[/cyan] first")
         raise typer.Exit(1)
 
-    client = HubClient(config.hub.url)
+    client = ApiClient(config.ops.url)
 
     # Check if node exists
     existing = client.get_node_by_hostname(hostname)
     if existing:
         console.print(f"[yellow]Node already registered:[/yellow] {existing['id'][:8]}...")
-        console.print("To update, use the hub UI")
+        console.print("To update, use the OPS UI")
         return
 
     # Create node
@@ -204,10 +204,10 @@ def register(
         console.print(f"[green]✓[/green] Node registered: {node['id'][:8]}...")
 
         # Update config
-        config.hub.node_id = node["id"]
+        config.ops.node_id = node["id"]
         config.save()
         console.print("[green]✓[/green] Configuration updated")
-    except HubError as e:
+    except ApiError as e:
         console.print(f"[red]✗[/red] Registration failed: {e}")
         raise typer.Exit(1)
 
@@ -222,20 +222,20 @@ def sync(
     ),
 ) -> None:
     """
-    Discover domains and sync to hub.
+    Discover domains and sync to OPS API.
 
     Alias for 'psa discover --push'. Discovers local domains
-    and pushes them to the configured hub.
+    and pushes them to the configured OPS API.
 
     Examples:
-        psa hub sync
-        psa hub sync --type app
+        psa ops sync
+        psa ops sync --type app
     """
     config = get_config()
     hostname = get_hostname()
 
-    if not config.hub.is_configured():
-        print_error("Hub not configured. Run 'psa init' first")
+    if not config.ops.is_configured():
+        print_error("OPS not configured. Run 'psa init' first")
         raise typer.Exit(1)
 
     # Discover domains
@@ -266,9 +266,9 @@ def sync(
 
     console.print(f"[green]✓[/green] Found {len(domains)} domain(s)")
 
-    # Push to hub
-    console.print(f"Syncing to {config.hub.url}...")
-    client = HubClient(config.hub.url)
+    # Push to API
+    console.print(f"Syncing to {config.ops.url}...")
+    client = ApiClient(config.ops.url)
 
     domain_dicts = [d.to_dict() for d in domains]
 
@@ -276,7 +276,7 @@ def sync(
         result = client.ingest_scan(
             hostname=hostname,
             domains=domain_dicts,
-            environment_id=config.hub.environment_id,
+            environment_id=config.ops.environment_id,
         )
 
         if result.get("errors"):
@@ -293,6 +293,6 @@ def sync(
             msg += f", {configs} config versions"
         print_success(msg)
 
-    except HubError as e:
+    except ApiError as e:
         print_error(f"Sync failed: {e}")
         raise typer.Exit(1)
