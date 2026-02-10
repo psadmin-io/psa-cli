@@ -13,7 +13,7 @@ from typing import Any, List, Optional
 
 @dataclass
 class ApiClient:
-    """Client for interacting with psaOps API."""
+    """Client for interacting with psa-ops API."""
 
     base_url: str
     timeout: int = 30
