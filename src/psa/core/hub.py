@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import socket
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 
 @dataclass
@@ -217,11 +218,73 @@ class HubClient:
         except urllib.error.URLError as e:
             raise HubError(f"Connection failed: {e.reason}")
 
-# REMOVED: generate_from_environment method
-# Deferred to future iteration - see issue #56
+    def list_domains(
+        self,
+        name: Optional[str] = None,
+        node_id: Optional[str] = None,
+    ) -> List[dict]:
+        """List domains, optionally filtered by name and/or node."""
+        params = {}
+        if name:
+            params["name"] = name
+        if node_id:
+            params["node_id"] = node_id
+        return self._request("GET", "/api/v1/domains", params=params or None)
 
-# REMOVED: generate_from_environments method (bulk generation)
-# Deferred to issue #49 for future implementation
+    def resolve_domain(self, name: str, node_id: Optional[str] = None) -> Optional[dict]:
+        """Resolve a domain name to a Hub domain record.
+
+        Uses name filter on GET /api/v1/domains. Returns the first match
+        or None if no domain found.
+        """
+        domains = self.list_domains(name=name, node_id=node_id)
+        if domains:
+            return domains[0]
+        return None
+
+    def compare_configs(
+        self,
+        domain_ids: List[str],
+        config_type: Optional[str] = None,
+    ) -> dict:
+        """Compare configs across domains.
+
+        Args:
+            domain_ids: List of domain UUIDs to compare
+            config_type: Config file type (e.g. psappsrv.cfg)
+
+        Returns:
+            Comparison result from Hub API
+        """
+        query_parts = [
+            ("domain_ids", did) for did in domain_ids
+        ]
+        if config_type:
+            query_parts.append(("config_type", config_type))
+        qs = urllib.parse.urlencode(query_parts)
+        return self._request("GET", f"/api/v1/configs/compare?{qs}")
+
+    def get_domain_drift(
+        self,
+        domain_id: str,
+        config_type: Optional[str] = None,
+    ) -> dict:
+        """Get drift details for a domain.
+
+        Args:
+            domain_id: Domain UUID
+            config_type: Optional config file type filter
+        """
+        params = {}
+        if config_type:
+            params["config_type"] = config_type
+        return self._request(
+            "GET", f"/api/v1/domains/{domain_id}/drift", params=params or None
+        )
+
+    def get_drift_summary(self, domain_id: str) -> dict:
+        """Get drift summary across all config types for a domain."""
+        return self._request("GET", f"/api/v1/domains/{domain_id}/drift/summary")
 
 
 class HubError(Exception):

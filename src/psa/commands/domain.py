@@ -7,9 +7,12 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from psa.core.config import get_config
 from psa.core.domain import DomainDiscovery, DomainInfo
+from psa.core.domain_cache import get_cached_domain_id
+from psa.core.hub import HubClient, HubError
 from psa.core.output import print_error, print_info, print_success, print_warning
 from psa.core.psadmin import PsadminExecutor, PsadminResult
 
@@ -633,3 +636,121 @@ def set_env(
     except urllib.error.URLError as e:
         print_error(f"Connection failed: {e.reason}")
         raise typer.Exit(1)
+
+
+def _resolve_hub_domain_id(client: HubClient, name: str) -> str:
+    """Resolve domain name to UUID via cache then Hub API."""
+    cached = get_cached_domain_id(name)
+    if cached:
+        return cached
+    domain = client.resolve_domain(name)
+    if not domain:
+        print_error(f"Domain '{name}' not found in Hub")
+        raise typer.Exit(1)
+    return domain["id"]
+
+
+@app.command("drift")
+def drift(
+    name: str = typer.Argument(..., help="Domain name"),
+    config_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Config type for detailed drift (e.g. psappsrv.cfg)",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output as JSON",
+    ),
+) -> None:
+    """
+    Show config drift for a domain.
+
+    Without --type: shows drift summary across all config types.
+    With --type: shows detailed key-level changes for that config type.
+
+    Examples:
+        psa domain drift APPDOM
+        psa domain drift APPDOM --type psappsrv.cfg
+    """
+    config = get_config()
+    if not config.hub.is_configured():
+        print_error("Hub not configured. Run 'psa init' first")
+        raise typer.Exit(1)
+
+    client = HubClient(config.hub.url)
+    domain_id = _resolve_hub_domain_id(client, name)
+
+    try:
+        if config_type:
+            result = client.get_domain_drift(domain_id, config_type)
+        else:
+            result = client.get_drift_summary(domain_id)
+    except HubError as e:
+        print_error(f"Drift check failed: {e}")
+        raise typer.Exit(1)
+
+    if json_output:
+        console.print_json(json.dumps(result, default=str, indent=2))
+        return
+
+    if config_type:
+        # Detailed drift for a specific config type
+        changes = result.get("changes", [])
+        if not changes:
+            console.print(f"[green]No drift detected for {config_type}[/green]")
+            return
+
+        table = Table(title=f"Drift: {name} ({config_type})")
+        table.add_column("Key", style="cyan")
+        table.add_column("Previous", style="red")
+        table.add_column("Current", style="green")
+        table.add_column("Change", style="dim")
+
+        for change in changes:
+            change_type = change.get("change_type", "")
+            style = "yellow"
+            if change_type == "added":
+                style = "green"
+            elif change_type == "removed":
+                style = "red"
+
+            old_val = str(change.get("old_value", "")) if change.get("old_value") is not None else "[dim]-[/dim]"
+            new_val = str(change.get("new_value", "")) if change.get("new_value") is not None else "[dim]-[/dim]"
+
+            table.add_row(
+                change.get("key", ""),
+                old_val,
+                new_val,
+                f"[{style}]{change_type}[/{style}]",
+            )
+
+        console.print(table)
+    else:
+        # Summary across all config types
+        summaries = result.get("config_types", [])
+        if not summaries:
+            console.print(f"[green]No drift detected for {name}[/green]")
+            return
+
+        table = Table(title=f"Drift Summary: {name}")
+        table.add_column("Config Type", style="cyan")
+        table.add_column("Drift", style="white")
+        table.add_column("Changes", style="white")
+        table.add_column("Last Capture", style="dim")
+
+        for s in summaries:
+            has_drift = s.get("has_drift", False)
+            drift_style = "red" if has_drift else "green"
+            drift_text = "Yes" if has_drift else "No"
+            table.add_row(
+                s.get("config_type", ""),
+                f"[{drift_style}]{drift_text}[/{drift_style}]",
+                str(s.get("change_count", 0)),
+                str(s.get("last_capture", "")),
+            )
+
+        console.print(table)
