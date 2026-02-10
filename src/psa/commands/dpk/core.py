@@ -43,7 +43,7 @@ ENV_DPK_BASE = "DPK_BASE"
 # Defaults
 DEFAULT_DPK_BASE = "/u01/app/psoft"
 
-# psaOps hiera.yaml template (v5 format for Puppet 5+)
+# psa-ops hiera.yaml template (v5 format for Puppet 5+)
 HIERA_YAML_TEMPLATE = """\
 ---
 version: 5
@@ -71,8 +71,8 @@ hierarchy:
   - name: "Common customizations"
     path: "cust/common.yaml"
 
-  - name: "psaOps common"
-    path: "psaOps/common.yaml"
+  - name: "psa-ops common"
+    path: "psa-ops/common.yaml"
 
   # Delivered DPK YAML files (Oracle defaults)
   - name: "DPK configuration"
@@ -94,7 +94,7 @@ hierarchy:
     path: "defaults.yaml"
 """
 
-# psaOps site.pp template (role-based node classification)
+# psa-ops site.pp template (role-based node classification)
 SITE_PP_TEMPLATE = """\
 node default {
   case $facts[ps_role] {
@@ -1009,7 +1009,7 @@ def hiera(
     ),
 ) -> None:
     """
-    Install psaOps hiera.yaml for tier/environment lookups.
+    Install psa-ops hiera.yaml for tier/environment lookups.
 
     Copies hiera.yaml to both puppet/ and puppet/production/ directories,
     backing up existing files with .bak suffix.
@@ -1078,7 +1078,7 @@ def site(
     ),
 ) -> None:
     """
-    Install psaOps site.pp for role-based node classification.
+    Install psa-ops site.pp for role-based node classification.
 
     Copies site.pp to puppet/production/manifests/, backing up existing
     file with .bak suffix. Uses ps_role fact to select io_role class.
@@ -1134,7 +1134,7 @@ def modules(
     ),
 ) -> None:
     """
-    Deploy psaOps Puppet modules (io_profile, io_role).
+    Deploy psa-ops Puppet modules (io_profile, io_role).
 
     Copies io_profile and io_role modules to puppet/production/modules/,
     backing up existing directories with .bak suffix.
@@ -1194,14 +1194,14 @@ def modules(
             print_success(f"Installed: {target}")
 
     if not dry_run:
-        print_success("psaOps modules deployed (io_profile, io_role)")
+        print_success("psa-ops modules deployed (io_profile, io_role)")
 
 
 # --- Helper functions for sync command ---
 
 
 def _get_source_path(source: Optional[Path]) -> Path:
-    """Resolve psaOps-node source path from CLI arg, IO_HOME, or package location."""
+    """Resolve psa-ops-node source path from CLI arg, IO_HOME, or package location."""
     if source:
         return source.resolve()
 
@@ -1325,7 +1325,7 @@ def sync(
         None,
         "--source",
         "-s",
-        help="psaOps-node source path (or $IO_HOME)",
+        help="psa-ops-node source path (or $IO_HOME)",
     ),
     sync_ops: bool = typer.Option(
         False,
@@ -1353,7 +1353,7 @@ def sync(
     ),
 ) -> None:
     """
-    Sync all psaOps DPK files to local installation.
+    Sync all psa-ops DPK files to local installation.
 
     Deploys hiera.yaml, site.pp, and io_profile/io_role modules in one command.
     Optionally syncs Hiera data from OPS API with --ops flag.
@@ -1390,7 +1390,7 @@ def sync(
         console.print("[yellow]Dry run - no changes will be made[/yellow]")
         console.print()
 
-    console.print("[bold]Syncing psaOps DPK configuration...[/bold]")
+    console.print("[bold]Syncing psa-ops DPK configuration...[/bold]")
 
     # Deploy hiera.yaml
     if not _deploy_hiera_files(resolved_dpk, dry_run):
@@ -1429,5 +1429,5 @@ def sync(
 
     console.print()
     if not dry_run:
-        print_success("psaOps DPK sync complete")
+        print_success("psa-ops DPK sync complete")
     print_info("Next: psa dpk apply --role <role>")
