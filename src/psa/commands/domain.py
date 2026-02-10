@@ -584,7 +584,7 @@ def reconfigure(
 
 @app.command("set-env")
 def set_env(
-    domain_id: str = typer.Argument(..., help="Domain ID (from hub)"),
+    domain_id: str = typer.Argument(..., help="Domain ID (from PSA-OPS)"),
     environment_id: str = typer.Argument(..., help="Environment ID to assign"),
     ops_url: Optional[str] = typer.Option(
         None,
@@ -594,7 +594,7 @@ def set_env(
     ),
 ) -> None:
     """
-    Assign an environment to a domain in the hub.
+    Assign an environment to a domain in PSA-OPS.
 
     Examples:
         psa domain set-env abc123 def456

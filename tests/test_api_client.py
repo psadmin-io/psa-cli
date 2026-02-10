@@ -11,7 +11,7 @@ from psa.core.api import ApiClient, ApiError
 
 @pytest.fixture
 def client():
-    return ApiClient(base_url="http://hub:8002")
+    return ApiClient(base_url="http://api:8002")
 
 
 def _mock_response(data, status=200):
@@ -105,7 +105,7 @@ class TestCompareConfigs:
         assert "config_type" not in req.full_url
 
     @patch("urllib.request.urlopen")
-    def test_compare_hub_error(self, mock_urlopen, client):
+    def test_compare_api_error(self, mock_urlopen, client):
         import urllib.error
 
         error_resp = MagicMock()

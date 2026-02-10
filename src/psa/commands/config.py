@@ -32,7 +32,7 @@ def config_init(
         ...,
         "--node-id",
         "-n",
-        help="Node ID from hub",
+        help="Node ID from PSA-OPS",
     ),
     environment_id: Optional[str] = typer.Option(
         None,
@@ -162,7 +162,7 @@ def config_compare(
     """
     Compare config across domains.
 
-    Fetches config comparison from Hub for 2+ domains and displays
+    Fetches config comparison from PSA-OPS for 2+ domains and displays
     differences. By default only shows 'different' and 'missing' rows.
 
     Examples:

@@ -1337,13 +1337,13 @@ def sync(
         None,
         "--tier",
         "-t",
-        help="Tier for hub sync (with --hub)",
+        help="Tier for ops sync (with --ops)",
     ),
     environments: Optional[str] = typer.Option(
         None,
         "--environments",
         "-e",
-        help="Environments for hub sync, comma-separated (with --hub)",
+        help="Environments for ops sync, comma-separated (with --ops)",
     ),
     dry_run: bool = typer.Option(
         False,
