@@ -11,6 +11,7 @@ from rich.console import Console
 
 from psa.core.config import get_config
 from psa.core.domain import DomainDiscovery
+from psa.core.domain_cache import update_cache_from_ingest
 from psa.core.output import print_domains_table, print_error, print_json, print_success
 
 console = Console()
@@ -183,6 +184,10 @@ def discover(
             print_success(
                 f"Pushed to hub: {created} created, {updated} updated, {unchanged} unchanged"
             )
+
+            # Cache domain UUIDs from ingest response (if Hub returns them)
+            if result.get("domains"):
+                update_cache_from_ingest(result)
 
             if json_output:
                 print_json(result)
