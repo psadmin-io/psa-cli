@@ -266,7 +266,7 @@ def sync(
 
     console.print(f"[green]✓[/green] Found {len(domains)} domain(s)")
 
-    # Push to hub
+    # Push to API
     console.print(f"Syncing to {config.ops.url}...")
     client = ApiClient(config.ops.url)
 

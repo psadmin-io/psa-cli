@@ -21,20 +21,20 @@ MOCK_COMPARE_RESULT = {
 
 
 @pytest.fixture
-def hub_config():
-    return PsaConfig(ops=OpsConfig(url="http://hub:8002"))
+def ops_config():
+    return PsaConfig(ops=OpsConfig(url="http://api:8002"))
 
 
 class TestConfigCompare:
     @patch("psa.commands.config.get_config")
     @patch("psa.commands.config.ApiClient")
     @patch("psa.commands.config.get_cached_domain_id")
-    def test_compare_happy_path(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
-        mock_get_config.return_value = hub_config
+    def test_compare_happy_path(self, mock_cache, mock_api_cls, mock_get_config, ops_config):
+        mock_get_config.return_value = ops_config
         mock_cache.side_effect = lambda name, **kw: {"APPDOM1": "d1", "APPDOM2": "d2"}.get(name)
 
         mock_client = MagicMock()
-        mock_hub_cls.return_value = mock_client
+        mock_api_cls.return_value = mock_client
         mock_client.compare_configs.return_value = MOCK_COMPARE_RESULT
 
         result = runner.invoke(psa_app, ["config", "compare", "APPDOM1", "APPDOM2"])
@@ -50,12 +50,12 @@ class TestConfigCompare:
     @patch("psa.commands.config.get_config")
     @patch("psa.commands.config.ApiClient")
     @patch("psa.commands.config.get_cached_domain_id")
-    def test_compare_all_flag(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
-        mock_get_config.return_value = hub_config
+    def test_compare_all_flag(self, mock_cache, mock_api_cls, mock_get_config, ops_config):
+        mock_get_config.return_value = ops_config
         mock_cache.side_effect = lambda name, **kw: {"APPDOM1": "d1", "APPDOM2": "d2"}.get(name)
 
         mock_client = MagicMock()
-        mock_hub_cls.return_value = mock_client
+        mock_api_cls.return_value = mock_client
         mock_client.compare_configs.return_value = MOCK_COMPARE_RESULT
 
         result = runner.invoke(psa_app, ["config", "compare", "APPDOM1", "APPDOM2", "--all"])
@@ -66,12 +66,12 @@ class TestConfigCompare:
     @patch("psa.commands.config.get_config")
     @patch("psa.commands.config.ApiClient")
     @patch("psa.commands.config.get_cached_domain_id")
-    def test_compare_json_output(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
-        mock_get_config.return_value = hub_config
+    def test_compare_json_output(self, mock_cache, mock_api_cls, mock_get_config, ops_config):
+        mock_get_config.return_value = ops_config
         mock_cache.side_effect = lambda name, **kw: {"APPDOM1": "d1", "APPDOM2": "d2"}.get(name)
 
         mock_client = MagicMock()
-        mock_hub_cls.return_value = mock_client
+        mock_api_cls.return_value = mock_client
         mock_client.compare_configs.return_value = MOCK_COMPARE_RESULT
 
         result = runner.invoke(psa_app, ["config", "compare", "APPDOM1", "APPDOM2", "--json"])
@@ -80,8 +80,8 @@ class TestConfigCompare:
         assert "rows" in data
 
     @patch("psa.commands.config.get_config")
-    def test_compare_too_few_domains(self, mock_get_config, hub_config):
-        mock_get_config.return_value = hub_config
+    def test_compare_too_few_domains(self, mock_get_config, ops_config):
+        mock_get_config.return_value = ops_config
         result = runner.invoke(psa_app, ["config", "compare", "ONLY_ONE"])
         assert result.exit_code == 1
         assert "At least 2" in result.output
@@ -96,12 +96,12 @@ class TestConfigCompare:
     @patch("psa.commands.config.get_config")
     @patch("psa.commands.config.ApiClient")
     @patch("psa.commands.config.get_cached_domain_id")
-    def test_compare_with_type_flag(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
-        mock_get_config.return_value = hub_config
+    def test_compare_with_type_flag(self, mock_cache, mock_api_cls, mock_get_config, ops_config):
+        mock_get_config.return_value = ops_config
         mock_cache.side_effect = lambda name, **kw: {"A": "d1", "B": "d2"}.get(name)
 
         mock_client = MagicMock()
-        mock_hub_cls.return_value = mock_client
+        mock_api_cls.return_value = mock_client
         mock_client.compare_configs.return_value = {"rows": []}
 
         result = runner.invoke(psa_app, ["config", "compare", "A", "B", "--type", "psappsrv.cfg"])
@@ -111,13 +111,13 @@ class TestConfigCompare:
     @patch("psa.commands.config.get_config")
     @patch("psa.commands.config.ApiClient")
     @patch("psa.commands.config.get_cached_domain_id")
-    def test_compare_resolves_via_api_on_cache_miss(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
-        mock_get_config.return_value = hub_config
+    def test_compare_resolves_via_api_on_cache_miss(self, mock_cache, mock_api_cls, mock_get_config, ops_config):
+        mock_get_config.return_value = ops_config
         # Cache returns None for both
         mock_cache.return_value = None
 
         mock_client = MagicMock()
-        mock_hub_cls.return_value = mock_client
+        mock_api_cls.return_value = mock_client
         mock_client.resolve_domain.side_effect = [
             {"id": "d1", "name": "A"},
             {"id": "d2", "name": "B"},

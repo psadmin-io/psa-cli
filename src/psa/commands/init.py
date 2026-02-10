@@ -37,7 +37,7 @@ def init(
         None,
         "--environment-id",
         "-e",
-        help="Environment ID (hub mode only, skips auto-detection)",
+        help="Environment ID (ops mode only, skips auto-detection)",
     ),
     non_interactive: bool = typer.Option(
         False,

@@ -29,7 +29,7 @@ class OpsConfig:
     tier: Optional[str] = None
     pillar: Optional[str] = None
     zone: Optional[str] = None
-    # Node-level facts (from hub or init)
+    # Node-level facts (from ops or init)
     ps_role: Optional[str] = None
     # Suppress "using config defaults" warnings
     suppress_fact_warnings: bool = False

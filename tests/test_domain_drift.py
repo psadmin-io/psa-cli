@@ -13,8 +13,8 @@ runner = CliRunner()
 
 
 @pytest.fixture
-def hub_config():
-    return PsaConfig(ops=OpsConfig(url="http://hub:8002"))
+def ops_config():
+    return PsaConfig(ops=OpsConfig(url="http://api:8002"))
 
 
 MOCK_DRIFT_SUMMARY = {
@@ -36,12 +36,12 @@ class TestDomainDriftSummary:
     @patch("psa.commands.domain.get_config")
     @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
-    def test_summary_happy_path(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
-        mock_get_config.return_value = hub_config
+    def test_summary_happy_path(self, mock_cache, mock_api_cls, mock_get_config, ops_config):
+        mock_get_config.return_value = ops_config
         mock_cache.return_value = "d1"
 
         mock_client = MagicMock()
-        mock_hub_cls.return_value = mock_client
+        mock_api_cls.return_value = mock_client
         mock_client.get_drift_summary.return_value = MOCK_DRIFT_SUMMARY
 
         result = runner.invoke(psa_app, ["domain", "drift", "APPDOM"])
@@ -53,12 +53,12 @@ class TestDomainDriftSummary:
     @patch("psa.commands.domain.get_config")
     @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
-    def test_summary_no_drift(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
-        mock_get_config.return_value = hub_config
+    def test_summary_no_drift(self, mock_cache, mock_api_cls, mock_get_config, ops_config):
+        mock_get_config.return_value = ops_config
         mock_cache.return_value = "d1"
 
         mock_client = MagicMock()
-        mock_hub_cls.return_value = mock_client
+        mock_api_cls.return_value = mock_client
         mock_client.get_drift_summary.return_value = {"config_types": []}
 
         result = runner.invoke(psa_app, ["domain", "drift", "APPDOM"])
@@ -70,12 +70,12 @@ class TestDomainDriftDetail:
     @patch("psa.commands.domain.get_config")
     @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
-    def test_detail_with_type(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
-        mock_get_config.return_value = hub_config
+    def test_detail_with_type(self, mock_cache, mock_api_cls, mock_get_config, ops_config):
+        mock_get_config.return_value = ops_config
         mock_cache.return_value = "d1"
 
         mock_client = MagicMock()
-        mock_hub_cls.return_value = mock_client
+        mock_api_cls.return_value = mock_client
         mock_client.get_domain_drift.return_value = MOCK_DRIFT_DETAIL
 
         result = runner.invoke(psa_app, ["domain", "drift", "APPDOM", "--type", "psappsrv.cfg"])
@@ -87,12 +87,12 @@ class TestDomainDriftDetail:
     @patch("psa.commands.domain.get_config")
     @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
-    def test_detail_no_changes(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
-        mock_get_config.return_value = hub_config
+    def test_detail_no_changes(self, mock_cache, mock_api_cls, mock_get_config, ops_config):
+        mock_get_config.return_value = ops_config
         mock_cache.return_value = "d1"
 
         mock_client = MagicMock()
-        mock_hub_cls.return_value = mock_client
+        mock_api_cls.return_value = mock_client
         mock_client.get_domain_drift.return_value = {"changes": []}
 
         result = runner.invoke(psa_app, ["domain", "drift", "APPDOM", "--type", "psappsrv.cfg"])
@@ -104,12 +104,12 @@ class TestDomainDriftJson:
     @patch("psa.commands.domain.get_config")
     @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
-    def test_json_output(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
-        mock_get_config.return_value = hub_config
+    def test_json_output(self, mock_cache, mock_api_cls, mock_get_config, ops_config):
+        mock_get_config.return_value = ops_config
         mock_cache.return_value = "d1"
 
         mock_client = MagicMock()
-        mock_hub_cls.return_value = mock_client
+        mock_api_cls.return_value = mock_client
         mock_client.get_drift_summary.return_value = MOCK_DRIFT_SUMMARY
 
         result = runner.invoke(psa_app, ["domain", "drift", "APPDOM", "--json"])
@@ -129,12 +129,12 @@ class TestDomainDriftErrors:
     @patch("psa.commands.domain.get_config")
     @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
-    def test_domain_not_found(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
-        mock_get_config.return_value = hub_config
+    def test_domain_not_found(self, mock_cache, mock_api_cls, mock_get_config, ops_config):
+        mock_get_config.return_value = ops_config
         mock_cache.return_value = None
 
         mock_client = MagicMock()
-        mock_hub_cls.return_value = mock_client
+        mock_api_cls.return_value = mock_client
         mock_client.resolve_domain.return_value = None
 
         result = runner.invoke(psa_app, ["domain", "drift", "NONEXIST"])
@@ -144,14 +144,14 @@ class TestDomainDriftErrors:
     @patch("psa.commands.domain.get_config")
     @patch("psa.commands.domain.ApiClient")
     @patch("psa.commands.domain.get_cached_domain_id")
-    def test_hub_error(self, mock_cache, mock_hub_cls, mock_get_config, hub_config):
+    def test_api_error(self, mock_cache, mock_api_cls, mock_get_config, ops_config):
         from psa.core.api import ApiError
 
-        mock_get_config.return_value = hub_config
+        mock_get_config.return_value = ops_config
         mock_cache.return_value = "d1"
 
         mock_client = MagicMock()
-        mock_hub_cls.return_value = mock_client
+        mock_api_cls.return_value = mock_client
         mock_client.get_drift_summary.side_effect = ApiError("server error", status_code=500)
 
         result = runner.invoke(psa_app, ["domain", "drift", "APPDOM"])

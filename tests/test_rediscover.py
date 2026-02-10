@@ -70,7 +70,7 @@ class TestRediscoverAfterApply:
             ["dpk", "apply", "--dpk-path", str(dpk_path), "--rediscover"],
         )
 
-        # apply should succeed (exit 0) and _push_to_hub should have been called
+        # apply should succeed (exit 0) and _push_to_api should have been called
         assert result.exit_code == 0, result.output
         mock_push.assert_called_once()
 
@@ -96,7 +96,7 @@ class TestRediscoverAfterApply:
 
     @patch("psa.commands.dpk.core.get_config")
     @patch("psa.commands.dpk.core.subprocess.run")
-    def test_hub_not_configured_warns(self, mock_run, mock_get_config, tmp_path):
+    def test_ops_not_configured_warns(self, mock_run, mock_get_config, tmp_path):
         """--rediscover with no OPS config prints warning, does not crash."""
         dpk_path = self._build_dpk_tree(tmp_path)
 
@@ -112,4 +112,4 @@ class TestRediscoverAfterApply:
         )
 
         assert result.exit_code == 0, result.output
-        assert "not configured" in result.output.lower() or "Hub" in result.output
+        assert "not configured" in result.output.lower() or "OPS" in result.output
