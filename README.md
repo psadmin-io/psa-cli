@@ -1,6 +1,6 @@
 # psa-cli
 
-PeopleSoft Administration CLI - a unified command-line tool for managing PeopleSoft domains.
+psadmin.io CLI - a unified command-line tool for managing PeopleSoft domains.
 
 ## Installation
 
