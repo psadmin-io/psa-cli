@@ -10,10 +10,11 @@ from rich.console import Console
 from rich.table import Table
 
 from psa.core.config import get_config
+from psa.core.discovery import run_discovery
 from psa.core.domain import DomainDiscovery, DomainInfo
 from psa.core.domain_cache import get_cached_domain_id
 from psa.core.api import ApiClient, ApiError
-from psa.core.output import print_error, print_info, print_success, print_warning
+from psa.core.output import print_domains_table, print_error, print_info, print_json, print_success, print_warning
 from psa.core.psadmin import PsadminExecutor, PsadminResult
 
 console = Console()
@@ -97,7 +98,7 @@ def _report_status_to_api(name: str, status_str: str) -> None:
 
     domain_id = get_cached_domain_id(name)
     if not domain_id:
-        print_warning(f"No cached domain ID for '{name}'; run `psa discover --report` first")
+        print_warning(f"No cached domain ID for '{name}'; run `psa ops report` first")
         return
 
     try:
@@ -163,8 +164,23 @@ def list_domains(
     ),
 ) -> None:
     """List all domains."""
-    from psa.commands.discover import discover
-    discover(json_output=json_output, domain_type=domain_type)
+    config = get_config()
+    domains = run_discovery(config, domain_type)
+    domain_dicts = [d.to_dict() for d in domains]
+
+    # Strip config from table output
+    if not json_output:
+        for d in domain_dicts:
+            d.pop("config", None)
+
+    if json_output:
+        print_json(domain_dicts)
+    else:
+        if not domains:
+            console.print("[dim]No domains found[/dim]")
+            console.print(f"[dim]Searched: {config.get_ps_cfg_home()}[/dim]")
+        else:
+            print_domains_table(domain_dicts)
 
 
 @app.command("status")
@@ -624,7 +640,7 @@ def set_env(
         None,
         "--ops-url",
         envvar="PSA_OPS_URL",
-        help="OPS API URL (or uses saved config from psa init)",
+        help="OPS API URL (or uses saved config from psa config setup)",
     ),
 ) -> None:
     """
@@ -641,7 +657,7 @@ def set_env(
         if config.ops.is_configured():
             effective_ops_url = config.ops.url
         else:
-            print_error("OPS not configured. Run 'psa init' first or use --ops-url")
+            print_error("OPS not configured. Run 'psa config setup' first or use --ops-url")
             raise typer.Exit(1)
 
     url = f"{effective_ops_url.rstrip('/')}/api/v1/domains/{domain_id}"
@@ -712,7 +728,7 @@ def drift(
     """
     config = get_config()
     if not config.ops.is_configured():
-        print_error("OPS not configured. Run 'psa init' first")
+        print_error("OPS not configured. Run 'psa config setup' first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
