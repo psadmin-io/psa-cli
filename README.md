@@ -54,7 +54,7 @@ psa domain bounce APPDOM           # Full bounce (stop, purge, flush, configure,
 ```bash
 psa discover                       # Discover domains on this node
 psa discover --json                # Output as JSON
-psa discover --push                # Push to API (requires API connection)
+psa discover --report              # Report to API (requires API connection)
 ```
 
 ### OPS Integration (when connected)

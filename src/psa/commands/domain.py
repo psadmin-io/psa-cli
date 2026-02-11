@@ -97,7 +97,7 @@ def _report_status_to_api(name: str, status_str: str) -> None:
 
     domain_id = get_cached_domain_id(name)
     if not domain_id:
-        print_warning(f"No cached domain ID for '{name}'; run `psa discover --push` first")
+        print_warning(f"No cached domain ID for '{name}'; run `psa discover --report` first")
         return
 
     try:

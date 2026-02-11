@@ -94,7 +94,7 @@ class TestStatusReportFlag:
         result = runner.invoke(psa_app, ["domain", "status", "APPDOM", "--report"])
         assert result.exit_code == 0
         assert "No cached domain ID" in result.output
-        assert "psa discover --push" in result.output
+        assert "psa discover --report" in result.output
 
     @patch("psa.commands.domain._find_domain")
     @patch("psa.commands.domain._get_executor")
