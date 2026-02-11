@@ -103,7 +103,7 @@ def config_show() -> None:
         console.print(f"  PS_CFG_HOME: {config.ps_cfg_home}")
     if config.ps_home:
         console.print(f"  PS_HOME: {config.ps_home}")
-    console.print(f"  Domain user: {config.domain_user}")
+    console.print(f"  Runtime user: {config.runtime_user}")
 
     if config.ops.is_configured():
         console.print("\n[bold]OPS:[/bold]")

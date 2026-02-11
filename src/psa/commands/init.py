@@ -27,11 +27,11 @@ def init(
         "-c",
         help="PS_CFG_HOME path (auto-detected if not specified)",
     ),
-    domain_user: Optional[str] = typer.Option(
+    runtime_user: Optional[str] = typer.Option(
         None,
-        "--domain-user",
+        "--runtime-user",
         "-u",
-        help="Domain user (default: psadm2)",
+        help="Runtime user (default: psadm2)",
     ),
     environment_id: Optional[str] = typer.Option(
         None,
@@ -70,13 +70,13 @@ def init(
     if ops_url:
         _init_ops_mode(config, ops_url, environment_id, role, non_interactive)
     else:
-        _init_standalone_mode(config, ps_cfg_home, domain_user, non_interactive)
+        _init_standalone_mode(config, ps_cfg_home, runtime_user, non_interactive)
 
 
 def _init_standalone_mode(
     config,
     ps_cfg_home: Optional[str],
-    domain_user: Optional[str],
+    runtime_user: Optional[str],
     non_interactive: bool,
 ) -> None:
     """Initialize in standalone mode (no OPS connection)."""
@@ -98,13 +98,13 @@ def _init_standalone_mode(
             )
             config.ps_cfg_home = Path(path_input)
 
-    # Configure domain user
-    if domain_user:
-        config.domain_user = domain_user
+    # Configure runtime user
+    if runtime_user:
+        config.runtime_user = runtime_user
     elif not non_interactive:
-        config.domain_user = Prompt.ask(
-            "Domain user",
-            default=config.domain_user,
+        config.runtime_user = Prompt.ask(
+            "Runtime user",
+            default=config.runtime_user,
         )
 
     # Discover domains

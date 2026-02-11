@@ -46,7 +46,7 @@ class PsadminExecutor:
 
     def _is_runtime_user(self) -> bool:
         """Check if current user is the domain runtime user."""
-        return os.environ.get("USER") == self.config.domain_user
+        return os.environ.get("USER") == self.config.runtime_user
 
     def _build_command(
         self,
@@ -68,9 +68,9 @@ class PsadminExecutor:
                 return ["sh", "-c", f"{env_prefix}{' '.join(base_cmd)}"]
             return base_cmd
         else:
-            # Run with sudo as domain_user
+            # Run with sudo as runtime_user
             cmd_str = f"{env_prefix}{' '.join(base_cmd)}"
-            return ["sudo", "su", "-", self.config.domain_user, "-c", cmd_str]
+            return ["sudo", "su", "-", self.config.runtime_user, "-c", cmd_str]
 
     def run(
         self,
@@ -305,7 +305,7 @@ class PsadminExecutor:
 
         cmd = [str(script)]
         if not self._is_runtime_user() and self.config.sudo_enabled:
-            cmd = ["sudo", "su", "-", self.config.domain_user, "-c", str(script)]
+            cmd = ["sudo", "su", "-", self.config.runtime_user, "-c", str(script)]
 
         try:
             result = subprocess.run(
