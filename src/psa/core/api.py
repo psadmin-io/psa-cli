@@ -295,6 +295,16 @@ class ApiClient:
             "GET", f"/api/v1/domains/{domain_id}/drift", params=params or None
         )
 
+    def update_domain(self, domain_id: str, **kwargs: Any) -> dict:
+        """Update a domain via PATCH.
+
+        Args:
+            domain_id: UUID of the domain
+            **kwargs: Fields to update (e.g. status="Running")
+        """
+        data = {k: v for k, v in kwargs.items() if v is not None}
+        return self._request("PATCH", f"/api/v1/domains/{domain_id}", data=data)
+
     def get_drift_summary(self, domain_id: str) -> dict:
         """Get drift summary across all config types for a domain."""
         return self._request("GET", f"/api/v1/domains/{domain_id}/drift/summary")

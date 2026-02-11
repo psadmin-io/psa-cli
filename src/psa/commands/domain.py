@@ -85,6 +85,29 @@ def _execute_domain_command(
     return method(domain.name, domain.ps_cfg_home)
 
 
+def _report_status_to_api(name: str, status_str: str) -> None:
+    """Report domain status to OPS API. Never fails the command."""
+    status_map = {"running": "Running", "stopped": "Stopped"}
+    api_status = status_map.get(status_str, "Unknown")
+
+    config = get_config()
+    if not config.ops.is_configured():
+        print_warning("OPS not configured; skipping report")
+        return
+
+    domain_id = get_cached_domain_id(name)
+    if not domain_id:
+        print_warning(f"No cached domain ID for '{name}'; run `psa discover --push` first")
+        return
+
+    try:
+        client = ApiClient(config.ops.url)
+        client.update_domain(domain_id, status=api_status)
+        console.print("[dim]\u2191 reported[/dim]")
+    except Exception as e:
+        print_warning(f"report failed: {e}")
+
+
 def _parse_status_output(output: str, domain_type: str) -> str:
     """Parse psadmin status output to determine running/stopped status."""
     output_lower = output.lower()
@@ -165,6 +188,12 @@ def status(
         "-t",
         help="Domain type (app, prcs, pia) - auto-detected if not specified",
     ),
+    report: bool = typer.Option(
+        False,
+        "--report",
+        "-r",
+        help="Report status to OPS API",
+    ),
 ) -> None:
     """
     Show status of a domain.
@@ -173,6 +202,7 @@ def status(
         psa domain status APPDOM           # Short output (running/stopped)
         psa domain status APPDOM --full    # Full psadmin output
         psa domain status APPDOM --json    # Structured JSON
+        psa domain status APPDOM --report  # Report status to OPS
     """
     domain = _find_domain(name, domain_type)
     if not domain:
@@ -182,19 +212,23 @@ def status(
     executor = _get_executor()
     result = _execute_domain_command(domain, "status", executor)
 
+    status_str = _parse_status_output(result.output, domain.domain_type)
+
     if json_output:
         console.print_json(json.dumps(_format_status_json(domain, result)))
     elif full:
         console.print(result.output)
     else:
         # Short output
-        status_str = _parse_status_output(result.output, domain.domain_type)
         if status_str == "running":
             console.print(f"[green]{name}[/green]: [bold green]running[/bold green]")
         elif status_str == "stopped":
             console.print(f"[yellow]{name}[/yellow]: [bold yellow]stopped[/bold yellow]")
         else:
             console.print(f"[dim]{name}[/dim]: [dim]unknown[/dim]")
+
+    if report:
+        _report_status_to_api(name, status_str)
 
 
 @app.command("start")
