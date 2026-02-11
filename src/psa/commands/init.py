@@ -61,9 +61,9 @@ def init(
         Connects to OPS API, registers node, and saves connection config.
 
     Examples:
-        psa init                                    # Standalone, auto-detect paths
-        psa init --ps-cfg-home /u01/app/psoft/cfg   # Standalone, explicit path
-        psa init --ops-url http://ops:8000          # OPS mode
+        psa config setup                                    # Standalone, auto-detect paths
+        psa config setup --ps-cfg-home /u01/app/psoft/cfg   # Standalone, explicit path
+        psa config setup --ops-url http://ops:8000          # OPS mode
     """
     config = get_config()
 
@@ -130,7 +130,7 @@ def _init_standalone_mode(
     console.print("  [cyan]psa domain status[/cyan] Check domain status")
     console.print("  [cyan]psa domain start[/cyan]  Start a domain")
     console.print("\nTo connect to OPS later:")
-    console.print("  [cyan]psa init --ops-url http://ops:8000[/cyan]")
+    console.print("  [cyan]psa config setup --ops-url http://ops:8000[/cyan]")
 
 
 def _init_ops_mode(

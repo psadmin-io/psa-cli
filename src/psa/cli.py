@@ -6,7 +6,7 @@ import typer
 from rich.console import Console
 
 from psa import __version__
-from psa.commands import cache, config, domain, dpk, ops, init, secrets
+from psa.commands import cache, config, domain, dpk, ops, secrets
 
 console = Console()
 
@@ -21,13 +21,10 @@ app = typer.Typer(
 # Register subcommands
 app.add_typer(domain.app, name="domain")
 app.add_typer(dpk.app, name="dpk")
-app.add_typer(secrets.app, name="secrets")
-app.add_typer(cache.app, name="cache")
+app.add_typer(secrets.app, name="secrets", hidden=True)
+app.add_typer(cache.app, name="cache", hidden=True)
 app.add_typer(ops.app, name="ops")
 app.add_typer(config.app, name="config")
-
-# Direct commands (not subgroups)
-app.command(name="init")(init.init)
 
 
 def version_callback(value: bool) -> None:

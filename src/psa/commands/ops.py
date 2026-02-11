@@ -30,7 +30,7 @@ def status() -> None:
 
     if not config.ops.is_configured():
         console.print("[yellow]Not configured[/yellow]")
-        console.print("\nRun [cyan]psa init --ops-url <url>[/cyan] to configure")
+        console.print("\nRun [cyan]psa config setup --ops-url <url>[/cyan] to configure")
         return
 
     console.print(f"Config file: [cyan]{CONFIG_PATH}[/cyan]")
@@ -68,7 +68,7 @@ def list_environments() -> None:
 
     if not config.ops.is_configured():
         console.print("[red]OPS not configured[/red]")
-        console.print("Run [cyan]psa init --ops-url <url>[/cyan] first")
+        console.print("Run [cyan]psa config setup --ops-url <url>[/cyan] first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
@@ -116,7 +116,7 @@ def list_nodes() -> None:
 
     if not config.ops.is_configured():
         console.print("[red]OPS not configured[/red]")
-        console.print("Run [cyan]psa init --ops-url <url>[/cyan] first")
+        console.print("Run [cyan]psa config setup --ops-url <url>[/cyan] first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
@@ -179,13 +179,13 @@ def register(
 
     if not config.ops.is_configured():
         console.print("[red]OPS not configured[/red]")
-        console.print("Run [cyan]psa init --ops-url <url>[/cyan] first")
+        console.print("Run [cyan]psa config setup --ops-url <url>[/cyan] first")
         raise typer.Exit(1)
 
     env_id = environment_id or config.ops.environment_id
     if not env_id:
         console.print("[red]No environment ID[/red]")
-        console.print("Use --environment-id or run [cyan]psa init[/cyan] first")
+        console.print("Use --environment-id or run [cyan]psa config setup[/cyan] first")
         raise typer.Exit(1)
 
     # Validate role if provided
@@ -278,7 +278,7 @@ def report(
     Discover domains and report to OPS API.
 
     Scans local domains and pushes results to the configured
-    OPS API. Requires OPS to be configured via 'psa init'.
+    OPS API. Requires OPS to be configured via 'psa config setup'.
 
     Examples:
         psa ops report
@@ -289,7 +289,7 @@ def report(
     hostname = get_hostname()
 
     if not config.ops.is_configured():
-        print_error("OPS not configured. Run 'psa init' first")
+        print_error("OPS not configured. Run 'psa config setup' first")
         raise typer.Exit(1)
 
     if ps_cfg_home:

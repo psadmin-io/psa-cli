@@ -640,7 +640,7 @@ def set_env(
         None,
         "--ops-url",
         envvar="PSA_OPS_URL",
-        help="OPS API URL (or uses saved config from psa init)",
+        help="OPS API URL (or uses saved config from psa config setup)",
     ),
 ) -> None:
     """
@@ -657,7 +657,7 @@ def set_env(
         if config.ops.is_configured():
             effective_ops_url = config.ops.url
         else:
-            print_error("OPS not configured. Run 'psa init' first or use --ops-url")
+            print_error("OPS not configured. Run 'psa config setup' first or use --ops-url")
             raise typer.Exit(1)
 
     url = f"{effective_ops_url.rstrip('/')}/api/v1/domains/{domain_id}"
@@ -728,7 +728,7 @@ def drift(
     """
     config = get_config()
     if not config.ops.is_configured():
-        print_error("OPS not configured. Run 'psa init' first")
+        print_error("OPS not configured. Run 'psa config setup' first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)

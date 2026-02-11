@@ -43,7 +43,7 @@ def sync(
     # Get config and connect to OPS
     config = get_config()
     if not config.ops.is_configured():
-        print_error("OPS not configured. Run 'psa init' first")
+        print_error("OPS not configured. Run 'psa config setup' first")
         raise typer.Exit(1)
 
     ops = config.ops
@@ -62,7 +62,7 @@ def sync(
         print_warning(f"Using config defaults: {', '.join(defaulted)}")
 
     if not tier and not environments:
-        print_error("Specify --tier and/or --environments (or run 'psa init' to set defaults)")
+        print_error("Specify --tier and/or --environments (or run 'psa config setup' to set defaults)")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
@@ -139,7 +139,7 @@ def get(
     # Get config and connect to OPS
     config = get_config()
     if not config.ops.is_configured():
-        print_error("OPS not configured. Run 'psa init' first")
+        print_error("OPS not configured. Run 'psa config setup' first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
@@ -193,7 +193,7 @@ def import_data(
     # Get config and connect to OPS
     config = get_config()
     if not config.ops.is_configured():
-        print_error("OPS not configured. Run 'psa init' first")
+        print_error("OPS not configured. Run 'psa config setup' first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)

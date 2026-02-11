@@ -6,6 +6,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from psa.commands import init
 from psa.core.config import CONFIG_PATH, PsaConfig, get_config
 from psa.core.domain_cache import get_cached_domain_id
 from psa.core.api import ApiClient, ApiError
@@ -20,7 +21,10 @@ app = typer.Typer(
 )
 
 
-@app.command(name="init")
+app.command(name="setup")(init.init)
+
+
+@app.command(name="init", hidden=True)
 def config_init(
     ops_url: str = typer.Option(
         ...,
@@ -176,7 +180,7 @@ def config_compare(
 
     config = get_config()
     if not config.ops.is_configured():
-        print_error("OPS not configured. Run 'psa init' first")
+        print_error("OPS not configured. Run 'psa config setup' first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
