@@ -60,7 +60,7 @@ class ApiClient:
 
     def health(self) -> dict:
         """Check API health."""
-        return self._request("GET", "/health")
+        return self._request("GET", "/api/health")
 
     def list_environments(self) -> list[dict]:
         """List all environments."""
