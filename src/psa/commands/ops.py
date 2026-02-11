@@ -251,8 +251,8 @@ def sync(
     """
     Discover domains and sync to OPS API.
 
-    Alias for 'psa discover --push'. Discovers local domains
-    and pushes them to the configured OPS API.
+    Alias for 'psa discover --report'. Discovers local domains
+    and reports them to the configured OPS API.
 
     Examples:
         psa ops sync

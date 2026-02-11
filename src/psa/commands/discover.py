@@ -17,13 +17,13 @@ from psa.core.output import print_domains_table, print_error, print_json, print_
 console = Console()
 
 
-def _push_to_api(
+def _report_to_api(
     ops_url: str,
     hostname: str,
     domains: list,
     environment_id: Optional[str] = None,
 ) -> dict:
-    """Push discovery results to OPS API."""
+    """Report discovery results to OPS API."""
     url = f"{ops_url.rstrip('/')}/api/v1/scan/ingest"
     if environment_id:
         url += f"?environment_id={environment_id}"
@@ -81,17 +81,17 @@ def discover(
         "-v",
         help="Show verbose output including config details",
     ),
-    push: bool = typer.Option(
+    report: bool = typer.Option(
         False,
-        "--push",
-        "-p",
-        help="Push results to OPS API (uses saved config from psa init)",
+        "--report",
+        "-r",
+        help="Report results to OPS API (uses saved config from psa init)",
     ),
     ops_url: Optional[str] = typer.Option(
         None,
         "--ops-url",
         envvar="PSA_OPS_URL",
-        help="Push results to OPS API (e.g., http://ops:8002)",
+        help="Report results to OPS API (e.g., http://ops:8002)",
     ),
     environment_id: Optional[str] = typer.Option(
         None,
@@ -113,7 +113,7 @@ def discover(
         psa discover --json
         psa discover --type app
         psa discover --ps-cfg-home /u01/app/psoft/cfg
-        psa discover --push
+        psa discover --report
         psa discover --ops-url http://ops:8002
     """
     # Build config
@@ -152,11 +152,11 @@ def discover(
     # Convert to dicts for output
     domain_dicts = [d.to_dict() for d in domains]
 
-    # Determine OPS URL (--push uses saved config)
+    # Determine OPS URL (--report uses saved config)
     effective_ops_url = ops_url
     effective_env_id = environment_id
 
-    if push and not ops_url:
+    if report and not ops_url:
         if config.ops.is_configured():
             effective_ops_url = config.ops.url
             if not effective_env_id:
@@ -165,11 +165,11 @@ def discover(
             print_error("OPS not configured. Run 'psa init' first or use --ops-url")
             raise typer.Exit(1)
 
-    # Push to OPS API if URL provided
+    # Report to OPS API if URL provided
     if effective_ops_url:
         hostname = socket.gethostname()
         try:
-            result = _push_to_api(
+            result = _report_to_api(
                 effective_ops_url, hostname, domain_dicts, effective_env_id
             )
 
@@ -182,7 +182,7 @@ def discover(
             updated = result.get("domains_updated", 0)
             unchanged = result.get("domains_unchanged", 0)
             print_success(
-                f"Pushed to OPS: {created} created, {updated} updated, {unchanged} unchanged"
+                f"Reported to OPS: {created} created, {updated} updated, {unchanged} unchanged"
             )
 
             # Cache domain UUIDs from ingest response (if API returns them)
@@ -194,7 +194,7 @@ def discover(
             return
 
         except RuntimeError as e:
-            print_error(f"OPS push failed: {e}")
+            print_error(f"OPS report failed: {e}")
             raise typer.Exit(1)
 
     # Remove config from output unless verbose

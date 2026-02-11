@@ -322,5 +322,5 @@ def _init_ops_mode(
     )
 
     console.print("\nYou can now use:")
-    console.print("  [cyan]psa discover --push[/cyan]  Push domains to OPS")
+    console.print("  [cyan]psa discover --report[/cyan]  Report domains to OPS")
     console.print("  [cyan]psa ops status[/cyan]       Check connection status")

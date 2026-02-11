@@ -53,7 +53,7 @@ class TestRediscoverAfterApply:
 
     @patch("psa.commands.dpk.core.get_config")
     @patch("psa.commands.dpk.core.subprocess.run")
-    @patch("psa.commands.discover._push_to_api")
+    @patch("psa.commands.discover._report_to_api")
     def test_push_called_with_rediscover(self, mock_push, mock_run, mock_get_config, tmp_path):
         dpk_path = self._build_dpk_tree(tmp_path)
 
@@ -70,13 +70,13 @@ class TestRediscoverAfterApply:
             ["dpk", "apply", "--dpk-path", str(dpk_path), "--rediscover"],
         )
 
-        # apply should succeed (exit 0) and _push_to_api should have been called
+        # apply should succeed (exit 0) and _report_to_api should have been called
         assert result.exit_code == 0, result.output
         mock_push.assert_called_once()
 
     @patch("psa.commands.dpk.core.get_config")
     @patch("psa.commands.dpk.core.subprocess.run")
-    @patch("psa.commands.discover._push_to_api")
+    @patch("psa.commands.discover._report_to_api")
     def test_push_not_called_without_flag(self, mock_push, mock_run, mock_get_config, tmp_path):
         dpk_path = self._build_dpk_tree(tmp_path)
 
