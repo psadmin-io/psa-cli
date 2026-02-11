@@ -39,6 +39,11 @@ def init(
         "-e",
         help="Environment ID (ops mode only, skips auto-detection)",
     ),
+    role: Optional[str] = typer.Option(
+        None,
+        "--role",
+        help="Node role: app, web, prcs, mid, webapp",
+    ),
     non_interactive: bool = typer.Option(
         False,
         "--yes",
@@ -63,7 +68,7 @@ def init(
     config = get_config()
 
     if ops_url:
-        _init_ops_mode(config, ops_url, environment_id, non_interactive)
+        _init_ops_mode(config, ops_url, environment_id, role, non_interactive)
     else:
         _init_standalone_mode(config, ps_cfg_home, domain_user, non_interactive)
 
@@ -132,6 +137,7 @@ def _init_ops_mode(
     config,
     ops_url: str,
     environment_id: Optional[str],
+    role: Optional[str],
     non_interactive: bool,
 ) -> None:
     """Initialize with OPS API connection."""
@@ -252,16 +258,19 @@ def _init_ops_mode(
     # Prompt for node-level facts
     console.print("\n[bold]Node configuration:[/bold]")
 
-    if non_interactive:
-        console.print("[red]✗[/red] Node facts required in non-interactive mode")
-        console.print("Role must be specified")
+    valid_roles = ["app", "web", "prcs", "mid", "webapp"]
+    if role and role in valid_roles:
+        ps_role = role
+    elif non_interactive:
+        console.print("[red]✗[/red] Node role required in non-interactive mode")
+        console.print("Use --role [app|web|prcs|mid|webapp]")
         raise typer.Exit(1)
-
-    ps_role = Prompt.ask(
-        "Role",
-        choices=["app", "web", "prcs", "mid", "webapp"],
-        default="app",
-    )
+    else:
+        ps_role = Prompt.ask(
+            "Role",
+            choices=valid_roles,
+            default="app",
+        )
 
     # Check if node exists
     node = client.get_node_by_hostname(hostname)
