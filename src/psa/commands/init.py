@@ -126,7 +126,7 @@ def _init_standalone_mode(
     console.print(f"\n[green]✓[/green] Configuration saved to [cyan]{CONFIG_PATH}[/cyan]")
 
     console.print("\nYou can now use:")
-    console.print("  [cyan]psa discover[/cyan]      List domains")
+    console.print("  [cyan]psa domain list[/cyan]   List domains")
     console.print("  [cyan]psa domain status[/cyan] Check domain status")
     console.print("  [cyan]psa domain start[/cyan]  Start a domain")
     console.print("\nTo connect to OPS later:")
@@ -322,5 +322,5 @@ def _init_ops_mode(
     )
 
     console.print("\nYou can now use:")
-    console.print("  [cyan]psa discover --report[/cyan]  Report domains to OPS")
-    console.print("  [cyan]psa ops status[/cyan]       Check connection status")
+    console.print("  [cyan]psa ops report[/cyan]    Report domains to OPS")
+    console.print("  [cyan]psa ops status[/cyan]    Check connection status")

@@ -7,8 +7,9 @@ from rich.console import Console
 from rich.table import Table
 
 from psa.core.config import CONFIG_PATH, get_config
-from psa.core.domain import DomainDiscovery
-from psa.core.output import print_error, print_success
+from psa.core.discovery import run_discovery
+from psa.core.domain_cache import update_cache_from_ingest
+from psa.core.output import print_error, print_json, print_success
 from psa.core.api import ApiClient, ApiError, get_hostname, get_ip_address
 
 console = Console()
@@ -239,24 +240,50 @@ def register(
         raise typer.Exit(1)
 
 
-@app.command(name="sync")
-def sync(
+@app.command(name="report")
+def report(
     domain_type: Optional[str] = typer.Option(
         None,
         "--type",
         "-t",
         help="Filter by domain type (app, prcs, pia)",
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output as JSON",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show verbose output including config details",
+    ),
+    ps_cfg_home: Optional[str] = typer.Option(
+        None,
+        "--ps-cfg-home",
+        envvar="PS_CFG_HOME",
+        help="Path to PS_CFG_HOME",
+    ),
+    environment_id: Optional[str] = typer.Option(
+        None,
+        "--environment-id",
+        "-e",
+        envvar="PSA_ENVIRONMENT_ID",
+        help="Override environment for discovered domains",
+    ),
 ) -> None:
     """
-    Discover domains and sync to OPS API.
+    Discover domains and report to OPS API.
 
-    Alias for 'psa discover --report'. Discovers local domains
-    and reports them to the configured OPS API.
+    Scans local domains and pushes results to the configured
+    OPS API. Requires OPS to be configured via 'psa init'.
 
     Examples:
-        psa ops sync
-        psa ops sync --type app
+        psa ops report
+        psa ops report --type app
+        psa ops report --verbose
     """
     config = get_config()
     hostname = get_hostname()
@@ -265,45 +292,33 @@ def sync(
         print_error("OPS not configured. Run 'psa init' first")
         raise typer.Exit(1)
 
+    if ps_cfg_home:
+        from pathlib import Path
+
+        config.ps_cfg_home = Path(ps_cfg_home)
+
     # Discover domains
     console.print("Discovering domains...")
-    discovery = DomainDiscovery(config)
-
-    try:
-        if domain_type:
-            domain_type = domain_type.lower()
-            if domain_type == "app":
-                domains = discovery.discover_appserver_domains()
-            elif domain_type == "prcs":
-                domains = discovery.discover_prcs_domains()
-            elif domain_type == "pia":
-                domains = discovery.discover_pia_domains()
-            else:
-                print_error(f"Unknown domain type: {domain_type}")
-                raise typer.Exit(1)
-        else:
-            domains = discovery.discover_all()
-    except Exception as e:
-        print_error(f"Discovery failed: {e}")
-        raise typer.Exit(1)
+    domains = run_discovery(config, domain_type)
 
     if not domains:
         console.print("[dim]No domains found[/dim]")
         return
 
-    console.print(f"[green]✓[/green] Found {len(domains)} domain(s)")
+    console.print(f"[green]\u2713[/green] Found {len(domains)} domain(s)")
 
     # Push to API
-    console.print(f"Syncing to {config.ops.url}...")
+    console.print(f"Reporting to {config.ops.url}...")
     client = ApiClient(config.ops.url)
 
     domain_dicts = [d.to_dict() for d in domains]
+    effective_env_id = environment_id or config.ops.environment_id
 
     try:
         result = client.ingest_scan(
             hostname=hostname,
             domains=domain_dicts,
-            environment_id=config.ops.environment_id,
+            environment_id=effective_env_id,
         )
 
         if result.get("errors"):
@@ -315,11 +330,18 @@ def sync(
         updated = result.get("domains_updated", 0)
         unchanged = result.get("domains_unchanged", 0)
         configs = result.get("configs_created", 0)
-        msg = f"Synced: {created} created, {updated} updated, {unchanged} unchanged"
+        msg = f"Reported: {created} created, {updated} updated, {unchanged} unchanged"
         if configs:
             msg += f", {configs} config versions"
         print_success(msg)
 
+        # Cache domain UUIDs from ingest response
+        if result.get("domains"):
+            update_cache_from_ingest(result)
+
+        if json_output:
+            print_json(result)
+
     except ApiError as e:
-        print_error(f"Sync failed: {e}")
+        print_error(f"Report failed: {e}")
         raise typer.Exit(1)

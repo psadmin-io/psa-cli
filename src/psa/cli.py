@@ -6,7 +6,7 @@ import typer
 from rich.console import Console
 
 from psa import __version__
-from psa.commands import cache, config, discover, domain, dpk, ops, init, secrets
+from psa.commands import cache, config, domain, dpk, ops, init, secrets
 
 console = Console()
 
@@ -27,7 +27,6 @@ app.add_typer(ops.app, name="ops")
 app.add_typer(config.app, name="config")
 
 # Direct commands (not subgroups)
-app.command(name="discover")(discover.discover)
 app.command(name="init")(init.init)
 
 
