@@ -100,6 +100,19 @@ class ApiClient:
         }
         return self._request("POST", "/api/v1/nodes", data=data)
 
+    def update_node(self, node_id: str, **kwargs: Any) -> dict:
+        """Update an existing node via PATCH.
+
+        Args:
+            node_id: UUID of the node
+            **kwargs: Fields to update (e.g. ps_role="mid")
+
+        Returns:
+            Updated node dict
+        """
+        data = {k: v for k, v in kwargs.items() if v is not None}
+        return self._request("PATCH", f"/api/v1/nodes/{node_id}", data=data)
+
     def ingest_scan(
         self,
         hostname: str,

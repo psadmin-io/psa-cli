@@ -166,6 +166,11 @@ def register(
         "-e",
         help="Environment ID (uses saved config if not provided)",
     ),
+    role: Optional[str] = typer.Option(
+        None,
+        "--role",
+        help="Node role: app, web, prcs, mid, webapp",
+    ),
 ) -> None:
     """Register or re-register this node with OPS."""
     config = get_config()
@@ -182,29 +187,51 @@ def register(
         console.print("Use --environment-id or run [cyan]psa init[/cyan] first")
         raise typer.Exit(1)
 
+    # Validate role if provided
+    valid_roles = ["app", "web", "prcs", "mid", "webapp"]
+    if role and role not in valid_roles:
+        console.print(f"[red]Invalid role:[/red] {role}")
+        console.print(f"Valid roles: {', '.join(valid_roles)}")
+        raise typer.Exit(1)
+
     client = ApiClient(config.ops.url)
 
     # Check if node exists
     existing = client.get_node_by_hostname(hostname)
     if existing:
         console.print(f"[yellow]Node already registered:[/yellow] {existing['id'][:8]}...")
-        console.print("To update, use the OPS UI")
+        if role:
+            try:
+                client.update_node(existing["id"], ps_role=role)
+                config.ops.ps_role = role
+                config.ops.node_id = existing["id"]
+                config.save()
+                console.print(f"[green]✓[/green] Role updated to [cyan]{role}[/cyan]")
+            except ApiError as e:
+                console.print(f"[red]✗[/red] Failed to update role: {e}")
+                raise typer.Exit(1)
         return
 
     # Create node
     ip_address = get_ip_address()
     console.print(f"Registering node [cyan]{hostname}[/cyan] ({ip_address})...")
     try:
+        create_kwargs = {}
+        if role:
+            create_kwargs["ps_role"] = role
         node = client.create_node(
             name=hostname,
             hostname=hostname,
             ip_address=ip_address,
             environment_id=env_id,
+            **create_kwargs,
         )
         console.print(f"[green]✓[/green] Node registered: {node['id'][:8]}...")
 
         # Update config
         config.ops.node_id = node["id"]
+        if role:
+            config.ops.ps_role = role
         config.save()
         console.print("[green]✓[/green] Configuration updated")
     except ApiError as e:

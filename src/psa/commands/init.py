@@ -277,6 +277,13 @@ def _init_ops_mode(
     if node:
         console.print(f"[green]✓[/green] Node already registered: {node['id'][:8]}...")
         node_id = node["id"]
+        # Update role if it differs from what's in the API
+        if ps_role and node.get("ps_role") != ps_role:
+            try:
+                client.update_node(node_id, ps_role=ps_role)
+                console.print(f"[green]✓[/green] Role updated to [cyan]{ps_role}[/cyan]")
+            except ApiError as e:
+                console.print(f"[yellow]![/yellow] Failed to update role: {e}")
     else:
         # Register node
         ip_address = get_ip_address()
