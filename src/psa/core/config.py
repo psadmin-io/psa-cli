@@ -54,6 +54,7 @@ class PsaConfig:
     # Domain management settings
     sudo_enabled: bool = True  # Use sudo to run commands as runtime_user
     parallel_boot: bool = False  # Use parallelboot instead of boot
+    skip_domain_confirm: bool = False  # Skip confirmation when acting on all domains
     multi_homes: list = field(default_factory=list)  # Additional PS_CFG_HOME paths
 
     @classmethod
@@ -124,6 +125,8 @@ class PsaConfig:
                     config.sudo_enabled = data["sudo_enabled"]
                 if "parallel_boot" in data:
                     config.parallel_boot = data["parallel_boot"]
+                if "skip_domain_confirm" in data:
+                    config.skip_domain_confirm = data["skip_domain_confirm"]
                 if multi_homes := data.get("multi_homes"):
                     config.multi_homes = [Path(p) for p in multi_homes]
 
@@ -181,6 +184,8 @@ class PsaConfig:
             data["sudo_enabled"] = False
         if self.parallel_boot:
             data["parallel_boot"] = True
+        if self.skip_domain_confirm:
+            data["skip_domain_confirm"] = True
         if self.multi_homes:
             data["multi_homes"] = [str(p) for p in self.multi_homes]
 
