@@ -90,7 +90,7 @@ def config_init(
 
 @app.command(name="show")
 def config_show() -> None:
-    """Show current configuration."""
+    """Show current configuration"""
     config = PsaConfig.load()
 
     console.print("[bold]psa Configuration[/bold]\n")

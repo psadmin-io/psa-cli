@@ -19,7 +19,7 @@ def init(
         None,
         "--ops-url",
         "-r",
-        help="PSA-OPS URL (e.g., http://ops.psaops.local:8000). If omitted, runs in standalone mode.",
+        help="PSA-OPS URL (e.g., http://ops.psaops.local:8000). If omitted, runs in standalone mode",
     ),
     ps_cfg_home: Optional[str] = typer.Option(
         None,
@@ -52,7 +52,7 @@ def init(
     ),
 ) -> None:
     """
-    Initialize psa with PSA-OPS.
+    Initialize psa with PSA-OPS
 
     Standalone mode (no --ops-url):
         Configures local paths and discovers domains.
