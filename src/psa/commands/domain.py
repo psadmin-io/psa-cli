@@ -131,7 +131,7 @@ def _parse_status_output(output: str, domain_type: str) -> str:
         # Running patterns
         if "processes running" in output_lower or "server status: active" in output_lower:
             return "running"
-        if domain_type == "prcs" and "process scheduler is running" in output_lower:
+        if domain_type == "prcs" and ("process scheduler is running" in output_lower or output_lower.strip() == "started"):
             return "running"
         # tmadmin process table — BBL present means Tuxedo domain is booted
         if "bbl" in output_lower and "prog name" in output_lower:
