@@ -124,12 +124,12 @@ def _parse_status_output(output: str, domain_type: str) -> str:
         # Check for running indicators
         if "processes running" in output_lower or "server status: active" in output_lower:
             return "running"
-        if "not booted" in output_lower or "no processes" in output_lower:
+        if "not booted" in output_lower or "no processes" in output_lower or "is not started" in output_lower:
             return "stopped"
     elif domain_type == "prcs":
         if "process scheduler is running" in output_lower:
             return "running"
-        if "not running" in output_lower or "no process" in output_lower:
+        if "not running" in output_lower or "no process" in output_lower or "is not started" in output_lower:
             return "stopped"
     elif domain_type == "pia":
         if "running" in output_lower and "not running" not in output_lower:
@@ -138,6 +138,14 @@ def _parse_status_output(output: str, domain_type: str) -> str:
             return "stopped"
 
     return "unknown"
+
+
+def _format_command_error(action: str, name: str, result: PsadminResult) -> str:
+    """Format error with fallback for empty psadmin output."""
+    if result.output.strip():
+        return f"Failed to {action} domain: {result.output}"
+    state = "stopped" if action in ("stop", "kill") else "running"
+    return f"Failed to {action} domain '{name}' (exit code {result.exit_code}). Domain may already be {state}."
 
 
 def _format_status_json(domain: DomainInfo, result: PsadminResult) -> dict:
@@ -213,7 +221,7 @@ def bounce(
     if result.success:
         print_success(f"Domain {name} bounced")
     else:
-        print_error(f"Failed to start domain: {result.output}")
+        print_error(_format_command_error("start", name, result))
         raise typer.Exit(result.exit_code)
 
 
@@ -249,7 +257,7 @@ def configure(
     if result.success:
         print_success(f"Domain {name} configured")
     else:
-        print_error(f"Failed to configure domain: {result.output}")
+        print_error(_format_command_error("configure", name, result))
         raise typer.Exit(result.exit_code)
 
 
@@ -403,7 +411,7 @@ def flush(
     if result.success:
         print_success(f"Domain {name} IPC flushed")
     else:
-        print_error(f"Failed to flush IPC: {result.output}")
+        print_error(_format_command_error("flush", name, result))
         raise typer.Exit(result.exit_code)
 
 
@@ -435,7 +443,7 @@ def kill(
     if result.success:
         print_success(f"Domain {name} killed")
     else:
-        print_error(f"Failed to kill domain: {result.output}")
+        print_error(_format_command_error("kill", name, result))
         raise typer.Exit(result.exit_code)
 
 
@@ -502,7 +510,7 @@ def purge(
     if result.success:
         print_success(f"Domain {name} cache purged")
     else:
-        print_error(f"Failed to purge cache: {result.output}")
+        print_error(_format_command_error("purge", name, result))
         raise typer.Exit(result.exit_code)
 
 
@@ -558,7 +566,7 @@ def reconfigure(
     if result.success:
         print_success(f"Domain {name} reconfigured")
     else:
-        print_error(f"Failed to start domain: {result.output}")
+        print_error(_format_command_error("start", name, result))
         raise typer.Exit(result.exit_code)
 
 
@@ -605,7 +613,7 @@ def restart(
     if result.success:
         print_success(f"Domain {name} restarted")
     else:
-        print_error(f"Failed to start domain: {result.output}")
+        print_error(_format_command_error("start", name, result))
         raise typer.Exit(result.exit_code)
 
 
@@ -704,7 +712,7 @@ def start(
     if result.success:
         print_success(f"Domain {name} started")
     else:
-        print_error(f"Failed to start domain: {result.output}")
+        print_error(_format_command_error("start", name, result))
         raise typer.Exit(result.exit_code)
 
 
@@ -809,5 +817,5 @@ def stop(
     if result.success:
         print_success(f"Domain {name} stopped")
     else:
-        print_error(f"Failed to stop domain: {result.output}")
+        print_error(_format_command_error(action, name, result))
         raise typer.Exit(result.exit_code)

@@ -47,6 +47,8 @@ class PsaConfig:
     io_base: Path = field(default_factory=lambda: Path(DEFAULT_IO_BASE))
     ps_cfg_home: Optional[Path] = None
     ps_home: Optional[Path] = None
+    ps_app_home: Optional[Path] = None
+    ps_cust_home: Optional[Path] = None
     runtime_user: str = "psadm2"
     ops: OpsConfig = field(default_factory=OpsConfig)
     # Domain management settings
@@ -65,6 +67,12 @@ class PsaConfig:
 
         if ps_home := os.environ.get("PS_HOME"):
             config.ps_home = Path(ps_home)
+
+        if ps_app_home := os.environ.get("PS_APP_HOME"):
+            config.ps_app_home = Path(ps_app_home)
+
+        if ps_cust_home := os.environ.get("PS_CUST_HOME"):
+            config.ps_cust_home = Path(ps_cust_home)
 
         if ps_base := os.environ.get("PS_BASE"):
             config.ps_base = Path(ps_base)
@@ -104,6 +112,10 @@ class PsaConfig:
                     config.ps_cfg_home = Path(ps_cfg_home)
                 if ps_home := data.get("ps_home"):
                     config.ps_home = Path(ps_home)
+                if ps_app_home := data.get("ps_app_home"):
+                    config.ps_app_home = Path(ps_app_home)
+                if ps_cust_home := data.get("ps_cust_home"):
+                    config.ps_cust_home = Path(ps_cust_home)
                 if runtime_user := data.get("runtime_user", data.get("domain_user")):
                     config.runtime_user = runtime_user
 
@@ -157,6 +169,10 @@ class PsaConfig:
             data["ps_cfg_home"] = str(self.ps_cfg_home)
         if self.ps_home:
             data["ps_home"] = str(self.ps_home)
+        if self.ps_app_home:
+            data["ps_app_home"] = str(self.ps_app_home)
+        if self.ps_cust_home:
+            data["ps_cust_home"] = str(self.ps_cust_home)
         if self.runtime_user != "psadm2":
             data["runtime_user"] = self.runtime_user
 
