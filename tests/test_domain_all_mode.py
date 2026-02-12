@@ -103,6 +103,14 @@ class TestConfirmTargets:
     def test_single_domain_auto_true(self):
         assert _confirm_targets([APPDOM], "start") is True
 
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain.typer.confirm", return_value=True)
+    def test_single_domain_all_mode_prompts(self, mock_confirm, mock_cfg):
+        mock_cfg.return_value = PsaConfig()
+        result = _confirm_targets([APPDOM], "start", all_mode=True)
+        assert result is True
+        mock_confirm.assert_called_once()
+
     def test_quiet_mode_auto_true(self):
         set_verbosity(Verbosity.QUIET)
         try:
