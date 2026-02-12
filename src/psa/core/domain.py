@@ -91,10 +91,21 @@ class DomainDiscovery:
         Returns:
             DomainInfo if found, None otherwise
         """
-        domains = self.discover_all_homes()
-        for domain in domains:
-            if domain.name == name:
-                if domain_type is None or domain.domain_type == domain_type:
+        # Scope discovery to requested type when possible
+        for cfg_home in self.config.get_all_cfg_homes():
+            if domain_type:
+                if domain_type == "app":
+                    domains = self.discover_appserver_domains(cfg_home)
+                elif domain_type == "prcs":
+                    domains = self.discover_prcs_domains(cfg_home)
+                elif domain_type == "pia":
+                    domains = self.discover_pia_domains(cfg_home)
+                else:
+                    domains = []
+            else:
+                domains = self.discover_all(cfg_home)
+            for domain in domains:
+                if domain.name == name:
                     return domain
         return None
 
@@ -104,33 +115,39 @@ class DomainDiscovery:
         cfg_home = ps_cfg_home or self.config.get_ps_cfg_home()
         appserv_path = cfg_home / "appserv"
 
-        if not appserv_path.exists():
+        try:
+            if not appserv_path.exists():
+                return domains
+        except PermissionError:
             return domains
 
         for domain_dir in appserv_path.iterdir():
-            if not domain_dir.is_dir():
-                continue
+            try:
+                if not domain_dir.is_dir():
+                    continue
 
-            # Skip special directories
-            if domain_dir.name in ("prcs", "search", "piaconfig"):
-                continue
+                # Skip special directories
+                if domain_dir.name in ("prcs", "search", "piaconfig"):
+                    continue
 
-            # Check for psappsrv.cfg to confirm it's an appserver domain
-            config_file = domain_dir / "psappsrv.cfg"
-            if config_file.exists():
-                domain = DomainInfo(
-                    name=domain_dir.name,
-                    domain_type="app",
-                    path=domain_dir,
-                    ps_cfg_home=cfg_home,
-                )
-                domain.config = self._parse_appserver_config(config_file)
-                domain.status = self._check_appserver_status(domain_dir)
-                # Capture raw config file content
-                raw_config = self._read_config_file(config_file)
-                if raw_config:
-                    domain.config_files.append(raw_config)
-                domains.append(domain)
+                # Check for psappsrv.cfg to confirm it's an appserver domain
+                config_file = domain_dir / "psappsrv.cfg"
+                if config_file.exists():
+                    domain = DomainInfo(
+                        name=domain_dir.name,
+                        domain_type="app",
+                        path=domain_dir,
+                        ps_cfg_home=cfg_home,
+                    )
+                    domain.config = self._parse_appserver_config(config_file)
+                    domain.status = self._check_appserver_status(domain_dir)
+                    # Capture raw config file content
+                    raw_config = self._read_config_file(config_file)
+                    if raw_config:
+                        domain.config_files.append(raw_config)
+                    domains.append(domain)
+            except PermissionError:
+                continue
 
         return domains
 
@@ -140,29 +157,35 @@ class DomainDiscovery:
         cfg_home = ps_cfg_home or self.config.get_ps_cfg_home()
         prcs_path = cfg_home / "appserv" / "prcs"
 
-        if not prcs_path.exists():
+        try:
+            if not prcs_path.exists():
+                return domains
+        except PermissionError:
             return domains
 
         for domain_dir in prcs_path.iterdir():
-            if not domain_dir.is_dir():
-                continue
+            try:
+                if not domain_dir.is_dir():
+                    continue
 
-            # Check for psprcs.cfg to confirm it's a prcs domain
-            config_file = domain_dir / "psprcs.cfg"
-            if config_file.exists():
-                domain = DomainInfo(
-                    name=domain_dir.name,
-                    domain_type="prcs",
-                    path=domain_dir,
-                    ps_cfg_home=cfg_home,
-                )
-                domain.config = self._parse_prcs_config(config_file)
-                domain.status = self._check_prcs_status(domain_dir)
-                # Capture raw config file content
-                raw_config = self._read_config_file(config_file)
-                if raw_config:
-                    domain.config_files.append(raw_config)
-                domains.append(domain)
+                # Check for psprcs.cfg to confirm it's a prcs domain
+                config_file = domain_dir / "psprcs.cfg"
+                if config_file.exists():
+                    domain = DomainInfo(
+                        name=domain_dir.name,
+                        domain_type="prcs",
+                        path=domain_dir,
+                        ps_cfg_home=cfg_home,
+                    )
+                    domain.config = self._parse_prcs_config(config_file)
+                    domain.status = self._check_prcs_status(domain_dir)
+                    # Capture raw config file content
+                    raw_config = self._read_config_file(config_file)
+                    if raw_config:
+                        domain.config_files.append(raw_config)
+                    domains.append(domain)
+            except PermissionError:
+                continue
 
         return domains
 
@@ -172,32 +195,38 @@ class DomainDiscovery:
         cfg_home = ps_cfg_home or self.config.get_ps_cfg_home()
         webserv_path = cfg_home / "webserv"
 
-        if not webserv_path.exists():
+        try:
+            if not webserv_path.exists():
+                return domains
+        except PermissionError:
             return domains
 
         for domain_dir in webserv_path.iterdir():
-            if not domain_dir.is_dir():
+            try:
+                if not domain_dir.is_dir():
+                    continue
+
+                # Check for configuration.properties or config.xml
+                config_props = domain_dir / "applications" / "peoplesoft" / "configuration.properties"
+                config_xml = domain_dir / "config" / "config.xml"
+
+                if config_props.exists() or config_xml.exists():
+                    domain = DomainInfo(
+                        name=domain_dir.name,
+                        domain_type="pia",
+                        path=domain_dir,
+                        ps_cfg_home=cfg_home,
+                    )
+                    if config_props.exists():
+                        domain.config = self._parse_pia_config(config_props)
+                        # Capture raw config file content
+                        raw_config = self._read_config_file(config_props)
+                        if raw_config:
+                            domain.config_files.append(raw_config)
+                    domain.status = self._check_pia_status(domain_dir)
+                    domains.append(domain)
+            except PermissionError:
                 continue
-
-            # Check for configuration.properties or config.xml
-            config_props = domain_dir / "applications" / "peoplesoft" / "configuration.properties"
-            config_xml = domain_dir / "config" / "config.xml"
-
-            if config_props.exists() or config_xml.exists():
-                domain = DomainInfo(
-                    name=domain_dir.name,
-                    domain_type="pia",
-                    path=domain_dir,
-                    ps_cfg_home=cfg_home,
-                )
-                if config_props.exists():
-                    domain.config = self._parse_pia_config(config_props)
-                    # Capture raw config file content
-                    raw_config = self._read_config_file(config_props)
-                    if raw_config:
-                        domain.config_files.append(raw_config)
-                domain.status = self._check_pia_status(domain_dir)
-                domains.append(domain)
 
         return domains
 

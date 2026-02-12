@@ -30,7 +30,14 @@ def _find_domain(name: str, domain_type: Optional[str] = None) -> Optional[Domai
     """Find a domain by name."""
     config = get_config()
     discovery = DomainDiscovery(config)
-    return discovery.find_domain(name, domain_type)
+    try:
+        return discovery.find_domain(name, domain_type)
+    except PermissionError as e:
+        print_error(f"Permission denied during discovery: {e}")
+        raise typer.Exit(1)
+    except Exception as e:
+        print_error(f"Discovery failed: {e}")
+        raise typer.Exit(1)
 
 
 def _get_executor() -> PsadminExecutor:
