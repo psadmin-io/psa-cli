@@ -271,7 +271,11 @@ def bounce(
     for domain in domains:
         print_info(f"Bouncing {domain.domain_type} domain: {domain.name}")
 
-        stop_result = run_step("Stopping", lambda d=domain: _execute_domain_command(d, "stop", executor))
+        stop_result = run_step(
+            "Stopping",
+            lambda d=domain: _execute_domain_command(d, "stop", executor),
+            warn_if=lambda r, d=domain: _is_already_stopped(r, d),
+        )
         if not stop_result.success and not _is_already_stopped(stop_result, domain):
             print_warning(f"Stop returned non-zero: {stop_result.output}")
         run_step("Purging cache", lambda d=domain: _execute_domain_command(d, "purge", executor))
@@ -329,7 +333,11 @@ def configure(
     for domain in domains:
         print_info(f"Configuring {domain.domain_type} domain: {domain.name}")
 
-        stop_result = run_step("Stopping", lambda d=domain: _execute_domain_command(d, "stop", executor))
+        stop_result = run_step(
+            "Stopping",
+            lambda d=domain: _execute_domain_command(d, "stop", executor),
+            warn_if=lambda r, d=domain: _is_already_stopped(r, d),
+        )
         if not stop_result.success and not _is_already_stopped(stop_result, domain):
             print_warning(f"Stop returned non-zero: {stop_result.output}")
 
@@ -540,7 +548,11 @@ def kill(
     failed = 0
     for domain in domains:
         print_info(f"Force stopping {domain.domain_type} domain: {domain.name}")
-        result = run_step("Killing", lambda d=domain: _execute_domain_command(d, "kill", executor))
+        result = run_step(
+            "Killing",
+            lambda d=domain: _execute_domain_command(d, "kill", executor),
+            warn_if=lambda r, d=domain: _is_already_stopped(r, d),
+        )
 
         if result.success:
             print_success(f"Domain {domain.name} killed")
@@ -691,7 +703,11 @@ def restart(
     for domain in domains:
         print_info(f"Restarting {domain.domain_type} domain: {domain.name}")
 
-        stop_result = run_step("Stopping", lambda d=domain: _execute_domain_command(d, "stop", executor))
+        stop_result = run_step(
+            "Stopping",
+            lambda d=domain: _execute_domain_command(d, "stop", executor),
+            warn_if=lambda r, d=domain: _is_already_stopped(r, d),
+        )
         if not stop_result.success and not _is_already_stopped(stop_result, domain):
             print_warning(f"Stop returned non-zero: {stop_result.output}")
 
@@ -947,7 +963,11 @@ def stop(
     failed = 0
     for domain in domains:
         print_info(f"Stopping {domain.domain_type} domain: {domain.name}")
-        result = run_step("Stopping", lambda d=domain: _execute_domain_command(d, action, executor))
+        result = run_step(
+            "Stopping",
+            lambda d=domain: _execute_domain_command(d, action, executor),
+            warn_if=lambda r, d=domain: _is_already_stopped(r, d),
+        )
 
         if result.success:
             print_success(f"Domain {domain.name} stopped")

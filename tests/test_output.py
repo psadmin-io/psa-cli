@@ -93,6 +93,42 @@ class TestRunStep:
         assert "raw line 1" in out
         assert "raw line 2" in out
 
+    def test_warn_if_shows_tilde_on_expected_failure(self):
+        fake = FakeResult(success=False, output="already stopped")
+        out = _capture(lambda: run_step("Stopping", lambda: fake, warn_if=lambda r: True))
+        assert "~" in out
+        assert "Stopping" in out
+
+    def test_warn_if_not_triggered_on_success(self):
+        """warn_if should be ignored when result is successful."""
+        called = []
+        fake = FakeResult(success=True, output="ok")
+        out = _capture(lambda: run_step("Stopping", lambda: fake, warn_if=lambda r: called.append(1) or True))
+        # warn_if should not be called for successful results
+        assert len(called) == 0
+        assert "~" not in out
+
+    def test_warn_if_false_shows_x(self):
+        """When warn_if returns False, normal failure icon shown."""
+        fake = FakeResult(success=False, output="real error")
+        out = _capture(lambda: run_step("Stopping", lambda: fake, warn_if=lambda r: False))
+        assert "~" not in out
+        assert "Stopping" in out
+
+    def test_warn_if_none_default(self):
+        """Without warn_if, failures show normal icon."""
+        fake = FakeResult(success=False, output="error")
+        out = _capture(lambda: run_step("Stopping", lambda: fake))
+        assert "~" not in out
+
+    def test_warn_if_receives_result(self):
+        """warn_if callable receives the actual result object."""
+        fake = FakeResult(success=False, output="domain not running")
+        received = []
+        _capture(lambda: run_step("Test", lambda: fake, warn_if=lambda r: received.append(r) or True))
+        assert len(received) == 1
+        assert received[0] is fake
+
 
 class TestPrintHelpers:
     def setup_method(self):

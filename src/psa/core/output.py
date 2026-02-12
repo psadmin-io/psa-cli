@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from enum import IntEnum
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Optional, TypeVar
 
 from rich.console import Console
 from rich.table import Table
@@ -39,8 +39,12 @@ def set_verbosity(v: Verbosity) -> None:
 # --- Step runner ---
 
 
-def run_step(label: str, func: Callable[[], T]) -> T:
-    """Run func with spinner, then print completion line."""
+def run_step(label: str, func: Callable[[], T], warn_if: Optional[Callable[[T], bool]] = None) -> T:
+    """Run func with spinner, then print completion line.
+
+    If the result indicates failure and ``warn_if(result)`` returns True,
+    a yellow ``~`` warning icon is shown instead of the red ``✗``.
+    """
     if _verbosity == Verbosity.QUIET:
         return func()
 
@@ -48,7 +52,13 @@ def run_step(label: str, func: Callable[[], T]) -> T:
         result = func()
 
     ok = not hasattr(result, "success") or result.success
-    mark = "[green]✓[/green]" if ok else "[red]✗[/red]"
+    warn = not ok and warn_if is not None and warn_if(result)
+    if ok:
+        mark = "[green]✓[/green]"
+    elif warn:
+        mark = "[yellow]~[/yellow]"
+    else:
+        mark = "[red]✗[/red]"
     done_label = label.rstrip(". ")
     console.print(f"  {mark} {done_label}")
 
