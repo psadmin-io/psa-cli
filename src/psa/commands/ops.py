@@ -23,7 +23,7 @@ app = typer.Typer(
 
 @app.command(name="environments")
 def list_environments() -> None:
-    """List environments from PSA-OPS."""
+    """List environments from PSA-OPS"""
     config = get_config()
 
     if not config.ops.is_configured():
@@ -71,7 +71,7 @@ def list_environments() -> None:
 
 @app.command(name="nodes")
 def list_nodes() -> None:
-    """List nodes from PSA-OPS."""
+    """List nodes from PSA-OPS"""
     config = get_config()
 
     if not config.ops.is_configured():
@@ -133,7 +133,7 @@ def register(
         help="Node role: app, web, prcs, mid, webapp",
     ),
 ) -> None:
-    """Register this node with PSA-OPS."""
+    """Register this node with PSA-OPS"""
     config = get_config()
     hostname = get_hostname()
 
@@ -235,7 +235,7 @@ def report(
     ),
 ) -> None:
     """
-    Discover domains and sync to PSA-OPS.
+    Discover domains and sync to PSA-OPS
 
     Scans local domains and pushes results to the configured
     PSA-OPS. Requires PSA-OPS to be configured via 'psa config setup'.
@@ -309,7 +309,7 @@ def report(
 
 @app.command(name="status")
 def status() -> None:
-    """Show PSA-OPS connection status."""
+    """Show PSA-OPS connection status"""
     config = get_config()
 
     console.print("[bold]PSA-OPS Configuration[/bold]\n")

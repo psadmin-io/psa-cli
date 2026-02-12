@@ -21,7 +21,7 @@ def get(
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file (or stdout)"),
 ):
     """
-    Get single YAML from PSA-OPS.
+    Get single YAML from PSA-OPS
 
     Examples:
         psa dpk data get tier DEV
@@ -68,7 +68,7 @@ def import_data(
     no_replace: bool = typer.Option(False, "--no-replace", help="Don't delete existing values (merge mode)"),
 ):
     """
-    Import YAML file into PSA-OPS.
+    Import YAML file into PSA-OPS
 
     Parses YAML and upserts config values to PSA-OPS database.
     By default, replaces all existing config for the level+key.
@@ -138,7 +138,7 @@ def sync(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress config default warnings"),
 ):
     """
-    Sync Hiera YAMLs from PSA-OPS to local Hiera paths.
+    Sync Hiera YAMLs from PSA-OPS to local Hiera paths
 
     Pulls tier and environment YAMLs from PSA-OPS and writes to:
     - {hiera_path}/tier/{tier}.yaml

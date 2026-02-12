@@ -165,7 +165,7 @@ def bounce(
     ),
 ) -> None:
     """
-    Full domain bounce.
+    Full domain bounce
 
     Examples:
         psa domain bounce APPDOM
@@ -221,7 +221,7 @@ def configure(
     ),
 ) -> None:
     """
-    Configure a domain.
+    Configure a domain
 
     Examples:
         psa domain configure APPDOM
@@ -275,7 +275,7 @@ def drift(
     ),
 ) -> None:
     """
-    Show config drift for a domain.
+    Show config drift for a domain
 
     Without --type: shows drift summary across all config types.
     With --type: shows detailed key-level changes for that config type.
@@ -375,7 +375,7 @@ def flush(
     ),
 ) -> None:
     """
-    Clear domain IPC resources.
+    Clear domain IPC resources
 
     Examples:
         psa domain flush APPDOM
@@ -411,7 +411,7 @@ def kill(
     ),
 ) -> None:
     """
-    Force stop a domain.
+    Force stop a domain
 
     Examples:
         psa domain kill APPDOM
@@ -447,7 +447,7 @@ def list_domains(
         help="Output as JSON",
     ),
 ) -> None:
-    """List all domains."""
+    """List all domains"""
     config = get_config()
     domains = run_discovery(config, domain_type)
     domain_dicts = [d.to_dict() for d in domains]
@@ -478,7 +478,7 @@ def purge(
     ),
 ) -> None:
     """
-    Clear domain cache.
+    Clear domain cache
 
     Examples:
         psa domain purge APPDOM
@@ -516,7 +516,7 @@ def reconfigure(
     ),
 ) -> None:
     """
-    Reconfigure a domain.
+    Reconfigure a domain
 
     Examples:
         psa domain reconfigure APPDOM
@@ -572,7 +572,7 @@ def restart(
     ),
 ) -> None:
     """
-    Restart a domain.
+    Restart a domain
 
     Examples:
         psa domain restart APPDOM
@@ -614,7 +614,7 @@ def set_env(
     ),
 ) -> None:
     """
-    Assign an environment to a domain in PSA-OPS.
+    Assign an environment to a domain in PSA-OPS
 
     Examples:
         psa domain set-env abc123 def456
@@ -675,7 +675,7 @@ def start(
     ),
 ) -> None:
     """
-    Start a domain.
+    Start a domain
 
     Examples:
         psa domain start APPDOM
@@ -730,7 +730,7 @@ def status(
     ),
 ) -> None:
     """
-    Show status of a domain.
+    Show status of a domain
 
     Examples:
         psa domain status APPDOM           # Short output (running/stopped)
@@ -782,7 +782,7 @@ def stop(
     ),
 ) -> None:
     """
-    Stop a domain.
+    Stop a domain
 
     Examples:
         psa domain stop APPDOM
