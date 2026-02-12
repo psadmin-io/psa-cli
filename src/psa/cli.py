@@ -13,7 +13,7 @@ console = Console()
 # Main application
 app = typer.Typer(
     name="psa",
-    help="PeopleSoft Administration Tools",
+    help="[bold]PSA-CLI[/bold]\n\nA PeopleSoft Administration Tool from psadmin.io",
     no_args_is_help=True,
     rich_markup_mode="rich",
     add_completion=False,
@@ -44,7 +44,6 @@ def main(
         help="Show version and exit.",
     ),
 ) -> None:
-    """A unified CLI for managing PeopleSoft domains and DPK deployments."""
     pass
 
 
