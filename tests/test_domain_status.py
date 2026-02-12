@@ -1,9 +1,21 @@
 """Tests for domain status parsing and command error formatting."""
 
+from pathlib import Path
+
 import pytest
 
-from psa.commands.domain import _format_command_error, _parse_status_output
+from psa.commands.domain import _format_command_error, _is_already_stopped, _parse_status_output
+from psa.core.domain import DomainInfo
 from psa.core.psadmin import PsadminResult
+
+
+def _make_domain(name, dtype="app"):
+    return DomainInfo(
+        name=name,
+        domain_type=dtype,
+        path=Path(f"/fake/{name}"),
+        ps_cfg_home=Path("/fake/cfg"),
+    )
 
 
 class TestParseStatusOutput:
@@ -108,3 +120,35 @@ class TestFormatCommandError:
         msg = _format_command_error("start", "APPDOM", result)
         assert "already be running" in msg
         assert "exit code 2" in msg
+
+
+class TestIsAlreadyStopped:
+    """Test _is_already_stopped helper."""
+
+    def test_success_returns_false(self):
+        result = PsadminResult(success=True, exit_code=0, output="ok", command="")
+        assert _is_already_stopped(result, _make_domain("APPDOM")) is False
+
+    def test_empty_output_returns_true(self):
+        result = PsadminResult(success=False, exit_code=1, output="", command="")
+        assert _is_already_stopped(result, _make_domain("APPDOM")) is True
+
+    def test_whitespace_output_returns_true(self):
+        result = PsadminResult(success=False, exit_code=1, output="  \n  ", command="")
+        assert _is_already_stopped(result, _make_domain("APPDOM")) is True
+
+    def test_stopped_output_returns_true(self):
+        result = PsadminResult(success=False, exit_code=1, output="TUXEDO domain not booted", command="")
+        assert _is_already_stopped(result, _make_domain("APPDOM")) is True
+
+    def test_real_failure_returns_false(self):
+        result = PsadminResult(success=False, exit_code=1, output="unexpected error text", command="")
+        assert _is_already_stopped(result, _make_domain("APPDOM")) is False
+
+    def test_pia_stopped(self):
+        result = PsadminResult(success=False, exit_code=1, output="PIA is not running", command="")
+        assert _is_already_stopped(result, _make_domain("TESTPIA", "pia")) is True
+
+    def test_prcs_not_started(self):
+        result = PsadminResult(success=False, exit_code=1, output="PRCSDOM is not started", command="")
+        assert _is_already_stopped(result, _make_domain("PRCSDOM", "prcs")) is True

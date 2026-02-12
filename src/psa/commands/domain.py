@@ -3,7 +3,7 @@
 import json
 import urllib.error
 import urllib.request
-from typing import Optional
+from typing import List, Optional, Set
 
 import typer
 from rich.table import Table
@@ -46,6 +46,56 @@ def _find_domain(name: str, domain_type: Optional[str] = None) -> Optional[Domai
     except Exception as e:
         print_error(f"Discovery failed: {e}")
         raise typer.Exit(1)
+
+
+def _resolve_targets(
+    name: Optional[str],
+    domain_type: Optional[str] = None,
+    skip_types: Optional[Set[str]] = None,
+) -> List[DomainInfo]:
+    """Resolve domain targets: single domain by name, or all via discovery.
+
+    Returns list of DomainInfo. Exits 1 if nothing found.
+    """
+    if name is not None:
+        domain = _find_domain(name, domain_type)
+        if not domain:
+            print_error(f"Domain '{name}' not found")
+            raise typer.Exit(1)
+        return [domain]
+
+    # Discover all domains
+    config = get_config()
+    domains = run_discovery(config, domain_type)
+    if skip_types:
+        domains = [d for d in domains if d.domain_type not in skip_types]
+    if not domains:
+        print_error("No domains found")
+        raise typer.Exit(1)
+    return domains
+
+
+def _confirm_targets(domains: List[DomainInfo], action: str) -> bool:
+    """Prompt user to confirm action on multiple domains.
+
+    Auto-confirms for single domain, QUIET mode, or skip_domain_confirm config.
+    """
+    if len(domains) == 1:
+        return True
+    if get_verbosity() == Verbosity.QUIET:
+        return True
+    config = get_config()
+    if config.skip_domain_confirm:
+        return True
+
+    table = Table(title=f"{action.capitalize()} targets")
+    table.add_column("Name", style="cyan")
+    table.add_column("Type", style="magenta")
+    for d in domains:
+        table.add_row(d.name, d.domain_type)
+    console.print(table)
+
+    return typer.confirm(f"{action.capitalize()} {len(domains)} domain(s)?")
 
 
 def _get_executor() -> PsadminExecutor:
@@ -153,6 +203,15 @@ def _parse_status_output(output: str, domain_type: str) -> str:
     return "unknown"
 
 
+def _is_already_stopped(result: PsadminResult, domain: DomainInfo) -> bool:
+    """Check if a failed stop/kill result means the domain was already stopped."""
+    if result.success:
+        return False
+    if not result.output.strip():
+        return True
+    return _parse_status_output(result.output, domain.domain_type) == "stopped"
+
+
 def _format_command_error(action: str, name: str, result: PsadminResult) -> str:
     """Format error with fallback for empty psadmin output."""
     if result.output.strip():
@@ -178,7 +237,7 @@ def _format_status_json(domain: DomainInfo, result: PsadminResult) -> dict:
 
 @app.command("bounce")
 def bounce(
-    name: str = typer.Argument(..., help="Domain name"),
+    name: Optional[str] = typer.Argument(None, help="Domain name (omit for all)"),
     serial: bool = typer.Option(
         False,
         "--serial",
@@ -197,68 +256,102 @@ def bounce(
 
     Examples:
         psa domain bounce APPDOM
+        psa domain bounce              # bounce all domains
+        psa domain bounce --type app   # bounce all app domains
     """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
+    domains = _resolve_targets(name, domain_type)
+    if not _confirm_targets(domains, "bounce"):
+        raise typer.Abort()
 
     executor = _get_executor()
     if serial:
         executor.config.parallel_boot = False
 
-    print_info(f"Bouncing {domain.domain_type} domain: {name}")
+    failed = 0
+    for domain in domains:
+        print_info(f"Bouncing {domain.domain_type} domain: {domain.name}")
 
-    run_step("Stopping", lambda: _execute_domain_command(domain, "stop", executor))
-    run_step("Purging cache", lambda: _execute_domain_command(domain, "purge", executor))
+        stop_result = run_step("Stopping", lambda d=domain: _execute_domain_command(d, "stop", executor))
+        if not stop_result.success and not _is_already_stopped(stop_result, domain):
+            print_warning(f"Stop returned non-zero: {stop_result.output}")
+        run_step("Purging cache", lambda d=domain: _execute_domain_command(d, "purge", executor))
 
-    if domain.domain_type != "pia":
-        run_step("Flushing IPC", lambda: _execute_domain_command(domain, "flush", executor))
-        run_step("Configuring", lambda: _execute_domain_command(domain, "configure", executor))
+        if domain.domain_type != "pia":
+            run_step("Flushing IPC", lambda d=domain: _execute_domain_command(d, "flush", executor))
+            run_step("Configuring", lambda d=domain: _execute_domain_command(d, "configure", executor))
 
-    result = run_step("Starting", lambda: _execute_domain_command(domain, "start", executor))
+        result = run_step("Starting", lambda d=domain: _execute_domain_command(d, "start", executor))
 
-    if result.success:
-        print_success(f"Domain {name} bounced")
-    else:
-        print_error(_format_command_error("start", name, result))
-        raise typer.Exit(result.exit_code)
+        if result.success:
+            print_success(f"Domain {domain.name} bounced")
+        else:
+            print_error(_format_command_error("start", domain.name, result))
+            failed += 1
+
+    if failed:
+        print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+        raise typer.Exit(1)
 
 
 @app.command("configure")
 def configure(
-    name: str = typer.Argument(..., help="Domain name"),
+    name: Optional[str] = typer.Argument(None, help="Domain name (omit for all)"),
+    restart: bool = typer.Option(False, "--restart", "-r", help="Start domain after configure"),
+    serial: bool = typer.Option(False, "--serial", "-s", help="Start processes serially"),
     domain_type: Optional[str] = typer.Option(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia)",
+        help="Domain type (app, prcs)",
     ),
 ) -> None:
     """
-    Configure a domain
+    Stop and configure a domain
 
     Examples:
         psa domain configure APPDOM
+        psa domain configure APPDOM --restart   # stop, configure, start
+        psa domain configure              # configure all (skips PIA)
+        psa domain configure --type app   # configure all app domains
     """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
-
-    if domain.domain_type == "pia":
+    domains = _resolve_targets(name, domain_type, skip_types={"pia"} if name is None else None)
+    if name is not None and domains[0].domain_type == "pia":
         print_error("Configure not supported for PIA domains")
         raise typer.Exit(1)
+    if not _confirm_targets(domains, "configure"):
+        raise typer.Abort()
 
     executor = _get_executor()
-    print_info(f"Configuring {domain.domain_type} domain: {name}")
-    result = run_step("Configuring", lambda: _execute_domain_command(domain, "configure", executor))
+    if serial:
+        executor.config.parallel_boot = False
 
-    if result.success:
-        print_success(f"Domain {name} configured")
-    else:
-        print_error(_format_command_error("configure", name, result))
-        raise typer.Exit(result.exit_code)
+    failed = 0
+    for domain in domains:
+        print_info(f"Configuring {domain.domain_type} domain: {domain.name}")
+
+        stop_result = run_step("Stopping", lambda d=domain: _execute_domain_command(d, "stop", executor))
+        if not stop_result.success and not _is_already_stopped(stop_result, domain):
+            print_warning(f"Stop returned non-zero: {stop_result.output}")
+
+        result = run_step("Configuring", lambda d=domain: _execute_domain_command(d, "configure", executor))
+        if not result.success:
+            print_error(_format_command_error("configure", domain.name, result))
+            failed += 1
+            continue
+
+        if restart:
+            result = run_step("Starting", lambda d=domain: _execute_domain_command(d, "start", executor))
+            if result.success:
+                print_success(f"Domain {domain.name} configured and started")
+            else:
+                print_error(_format_command_error("start", domain.name, result))
+                failed += 1
+        else:
+            print_success(f"Domain {domain.name} configured")
+
+    if failed:
+        print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+        raise typer.Exit(1)
 
 
 def _resolve_api_domain_id(client: ApiClient, name: str) -> str:
@@ -381,7 +474,7 @@ def drift(
 
 @app.command("flush")
 def flush(
-    name: str = typer.Argument(..., help="Domain name"),
+    name: Optional[str] = typer.Argument(None, help="Domain name (omit for all)"),
     domain_type: Optional[str] = typer.Option(
         None,
         "--type",
@@ -394,30 +487,36 @@ def flush(
 
     Examples:
         psa domain flush APPDOM
+        psa domain flush              # flush all (skips PIA)
+        psa domain flush --type app   # flush all app domains
     """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
-
-    if domain.domain_type == "pia":
+    domains = _resolve_targets(name, domain_type, skip_types={"pia"} if name is None else None)
+    if name is not None and domains[0].domain_type == "pia":
         print_warning("Flush not applicable for PIA domains")
         return
+    if not _confirm_targets(domains, "flush"):
+        raise typer.Abort()
 
     executor = _get_executor()
-    print_info(f"Flushing IPC for {domain.domain_type} domain: {name}")
-    result = run_step("Flushing IPC", lambda: _execute_domain_command(domain, "flush", executor))
+    failed = 0
+    for domain in domains:
+        print_info(f"Flushing IPC for {domain.domain_type} domain: {domain.name}")
+        result = run_step("Flushing IPC", lambda d=domain: _execute_domain_command(d, "flush", executor))
 
-    if result.success:
-        print_success(f"Domain {name} IPC flushed")
-    else:
-        print_error(_format_command_error("flush", name, result))
-        raise typer.Exit(result.exit_code)
+        if result.success:
+            print_success(f"Domain {domain.name} IPC flushed")
+        else:
+            print_error(_format_command_error("flush", domain.name, result))
+            failed += 1
+
+    if failed:
+        print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+        raise typer.Exit(1)
 
 
 @app.command("kill")
 def kill(
-    name: str = typer.Argument(..., help="Domain name"),
+    name: Optional[str] = typer.Argument(None, help="Domain name (omit for all)"),
     domain_type: Optional[str] = typer.Option(
         None,
         "--type",
@@ -430,21 +529,30 @@ def kill(
 
     Examples:
         psa domain kill APPDOM
+        psa domain kill              # kill all domains
+        psa domain kill --type app   # kill all app domains
     """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
+    domains = _resolve_targets(name, domain_type)
+    if not _confirm_targets(domains, "kill"):
+        raise typer.Abort()
 
     executor = _get_executor()
-    print_info(f"Force stopping {domain.domain_type} domain: {name}")
-    result = run_step("Killing", lambda: _execute_domain_command(domain, "kill", executor))
+    failed = 0
+    for domain in domains:
+        print_info(f"Force stopping {domain.domain_type} domain: {domain.name}")
+        result = run_step("Killing", lambda d=domain: _execute_domain_command(d, "kill", executor))
 
-    if result.success:
-        print_success(f"Domain {name} killed")
-    else:
-        print_error(_format_command_error("kill", name, result))
-        raise typer.Exit(result.exit_code)
+        if result.success:
+            print_success(f"Domain {domain.name} killed")
+        elif _is_already_stopped(result, domain):
+            print_warning(f"Domain {domain.name} already stopped")
+        else:
+            print_error(_format_command_error("kill", domain.name, result))
+            failed += 1
+
+    if failed:
+        print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+        raise typer.Exit(1)
 
 
 @app.command("list")
@@ -510,7 +618,7 @@ def list_domains(
 
 @app.command("purge")
 def purge(
-    name: str = typer.Argument(..., help="Domain name"),
+    name: Optional[str] = typer.Argument(None, help="Domain name (omit for all)"),
     domain_type: Optional[str] = typer.Option(
         None,
         "--type",
@@ -523,74 +631,33 @@ def purge(
 
     Examples:
         psa domain purge APPDOM
+        psa domain purge              # purge all domains
+        psa domain purge --type app   # purge all app domains
     """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
+    domains = _resolve_targets(name, domain_type)
+    if not _confirm_targets(domains, "purge"):
+        raise typer.Abort()
 
     executor = _get_executor()
-    print_info(f"Purging cache for {domain.domain_type} domain: {name}")
-    result = run_step("Purging cache", lambda: _execute_domain_command(domain, "purge", executor))
+    failed = 0
+    for domain in domains:
+        print_info(f"Purging cache for {domain.domain_type} domain: {domain.name}")
+        result = run_step("Purging cache", lambda d=domain: _execute_domain_command(d, "purge", executor))
 
-    if result.success:
-        print_success(f"Domain {name} cache purged")
-    else:
-        print_error(_format_command_error("purge", name, result))
-        raise typer.Exit(result.exit_code)
+        if result.success:
+            print_success(f"Domain {domain.name} cache purged")
+        else:
+            print_error(_format_command_error("purge", domain.name, result))
+            failed += 1
 
-
-@app.command("reconfigure")
-def reconfigure(
-    name: str = typer.Argument(..., help="Domain name"),
-    serial: bool = typer.Option(
-        False,
-        "--serial",
-        "-s",
-        help="Start processes serially",
-    ),
-    domain_type: Optional[str] = typer.Option(
-        None,
-        "--type",
-        "-t",
-        help="Domain type (app, prcs)",
-    ),
-) -> None:
-    """
-    Reconfigure a domain
-
-    Examples:
-        psa domain reconfigure APPDOM
-    """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
+    if failed:
+        print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
         raise typer.Exit(1)
-
-    if domain.domain_type == "pia":
-        print_error("Reconfigure not supported for PIA domains")
-        raise typer.Exit(1)
-
-    executor = _get_executor()
-    if serial:
-        executor.config.parallel_boot = False
-
-    print_info(f"Reconfiguring {domain.domain_type} domain: {name}")
-
-    run_step("Stopping", lambda: _execute_domain_command(domain, "stop", executor))
-    run_step("Configuring", lambda: _execute_domain_command(domain, "configure", executor))
-    result = run_step("Starting", lambda: _execute_domain_command(domain, "start", executor))
-
-    if result.success:
-        print_success(f"Domain {name} reconfigured")
-    else:
-        print_error(_format_command_error("start", name, result))
-        raise typer.Exit(result.exit_code)
 
 
 @app.command("restart")
 def restart(
-    name: str = typer.Argument(..., help="Domain name"),
+    name: Optional[str] = typer.Argument(None, help="Domain name (omit for all)"),
     serial: bool = typer.Option(
         False,
         "--serial",
@@ -609,28 +676,35 @@ def restart(
 
     Examples:
         psa domain restart APPDOM
+        psa domain restart              # restart all domains
+        psa domain restart --type app   # restart all app domains
     """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
+    domains = _resolve_targets(name, domain_type)
+    if not _confirm_targets(domains, "restart"):
+        raise typer.Abort()
 
     executor = _get_executor()
     if serial:
         executor.config.parallel_boot = False
 
-    print_info(f"Restarting {domain.domain_type} domain: {name}")
+    failed = 0
+    for domain in domains:
+        print_info(f"Restarting {domain.domain_type} domain: {domain.name}")
 
-    stop_result = run_step("Stopping", lambda: _execute_domain_command(domain, "stop", executor))
-    if not stop_result.success:
-        print_warning(f"Stop returned non-zero: {stop_result.output}")
+        stop_result = run_step("Stopping", lambda d=domain: _execute_domain_command(d, "stop", executor))
+        if not stop_result.success and not _is_already_stopped(stop_result, domain):
+            print_warning(f"Stop returned non-zero: {stop_result.output}")
 
-    result = run_step("Starting", lambda: _execute_domain_command(domain, "start", executor))
-    if result.success:
-        print_success(f"Domain {name} restarted")
-    else:
-        print_error(_format_command_error("start", name, result))
-        raise typer.Exit(result.exit_code)
+        result = run_step("Starting", lambda d=domain: _execute_domain_command(d, "start", executor))
+        if result.success:
+            print_success(f"Domain {domain.name} restarted")
+        else:
+            print_error(_format_command_error("start", domain.name, result))
+            failed += 1
+
+    if failed:
+        print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+        raise typer.Exit(1)
 
 
 @app.command("set-env")
@@ -691,7 +765,7 @@ def set_env(
 
 @app.command("start")
 def start(
-    name: str = typer.Argument(..., help="Domain name"),
+    name: Optional[str] = typer.Argument(None, help="Domain name (omit for all)"),
     serial: bool = typer.Option(
         False,
         "--serial",
@@ -711,30 +785,36 @@ def start(
     Examples:
         psa domain start APPDOM
         psa domain start PRCSDOM --serial
+        psa domain start              # start all domains
+        psa domain start --type app   # start all app domains
     """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
+    domains = _resolve_targets(name, domain_type)
+    if not _confirm_targets(domains, "start"):
+        raise typer.Abort()
 
-    # Temporarily disable parallel boot if serial requested
     executor = _get_executor()
     if serial:
         executor.config.parallel_boot = False
 
-    print_info(f"Starting {domain.domain_type} domain: {name}")
-    result = run_step("Starting", lambda: _execute_domain_command(domain, "start", executor))
+    failed = 0
+    for domain in domains:
+        print_info(f"Starting {domain.domain_type} domain: {domain.name}")
+        result = run_step("Starting", lambda d=domain: _execute_domain_command(d, "start", executor))
 
-    if result.success:
-        print_success(f"Domain {name} started")
-    else:
-        print_error(_format_command_error("start", name, result))
-        raise typer.Exit(result.exit_code)
+        if result.success:
+            print_success(f"Domain {domain.name} started")
+        else:
+            print_error(_format_command_error("start", domain.name, result))
+            failed += 1
+
+    if failed:
+        print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+        raise typer.Exit(1)
 
 
 @app.command("status")
 def status(
-    name: str = typer.Argument(..., help="Domain name"),
+    name: Optional[str] = typer.Argument(None, help="Domain name (omit for all)"),
     full: bool = typer.Option(
         False,
         "--full",
@@ -768,15 +848,52 @@ def status(
         psa domain status APPDOM --full    # Full psadmin output
         psa domain status APPDOM --json    # Structured JSON
         psa domain status APPDOM --report  # Report status to PSA-OPS
+        psa domain status                  # Status of all domains
+        psa domain status --type app       # Status of all app domains
     """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
+    domains = _resolve_targets(name, domain_type)
+    # No confirmation for read-only status
 
     executor = _get_executor()
-    result = _execute_domain_command(domain, "status", executor)
 
+    # Multi-domain: table or JSON array
+    if len(domains) > 1:
+        results = []
+        for domain in domains:
+            result = _execute_domain_command(domain, "status", executor)
+            status_str = _parse_status_output(result.output, domain.domain_type)
+            results.append((domain, result, status_str))
+
+        if json_output:
+            json_list = [_format_status_json(d, r) for d, r, _ in results]
+            console.print_json(json.dumps(json_list))
+        elif full or get_verbosity() == Verbosity.VERBOSE:
+            for domain, result, _ in results:
+                console.print(f"\n[bold]{domain.name}[/bold] ({domain.domain_type})")
+                console.print(result.output)
+        else:
+            table = Table(title="Domain Status")
+            table.add_column("Name", style="cyan")
+            table.add_column("Type", style="magenta")
+            table.add_column("Status")
+            for domain, _, status_str in results:
+                if status_str == "running":
+                    style = "bold green"
+                elif status_str == "stopped":
+                    style = "bold yellow"
+                else:
+                    style = "dim"
+                table.add_row(domain.name, domain.domain_type, f"[{style}]{status_str}[/{style}]")
+            console.print(table)
+
+        if report:
+            for domain, _, status_str in results:
+                _report_status_to_api(domain.name, status_str)
+        return
+
+    # Single domain: original behavior
+    domain = domains[0]
+    result = _execute_domain_command(domain, "status", executor)
     status_str = _parse_status_output(result.output, domain.domain_type)
 
     if json_output:
@@ -784,21 +901,20 @@ def status(
     elif full or get_verbosity() == Verbosity.VERBOSE:
         console.print(result.output)
     else:
-        # Short output
         if status_str == "running":
-            console.print(f"[green]{name}[/green]: [bold green]running[/bold green]")
+            console.print(f"[green]{domain.name}[/green]: [bold green]running[/bold green]")
         elif status_str == "stopped":
-            console.print(f"[yellow]{name}[/yellow]: [bold yellow]stopped[/bold yellow]")
+            console.print(f"[yellow]{domain.name}[/yellow]: [bold yellow]stopped[/bold yellow]")
         else:
-            console.print(f"[dim]{name}[/dim]: [dim]unknown[/dim]")
+            console.print(f"[dim]{domain.name}[/dim]: [dim]unknown[/dim]")
 
     if report:
-        _report_status_to_api(name, status_str)
+        _report_status_to_api(domain.name, status_str)
 
 
 @app.command("stop")
 def stop(
-    name: str = typer.Argument(..., help="Domain name"),
+    name: Optional[str] = typer.Argument(None, help="Domain name (omit for all)"),
     force: bool = typer.Option(
         False,
         "--force",
@@ -818,20 +934,29 @@ def stop(
     Examples:
         psa domain stop APPDOM
         psa domain stop PRCSDOM --force
+        psa domain stop              # stop all domains
+        psa domain stop --type app   # stop all app domains
     """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
+    domains = _resolve_targets(name, domain_type)
+    if not _confirm_targets(domains, "stop"):
+        raise typer.Abort()
 
     executor = _get_executor()
     action = "kill" if force else "stop"
 
-    print_info(f"Stopping {domain.domain_type} domain: {name}")
-    result = run_step("Stopping", lambda: _execute_domain_command(domain, action, executor))
+    failed = 0
+    for domain in domains:
+        print_info(f"Stopping {domain.domain_type} domain: {domain.name}")
+        result = run_step("Stopping", lambda d=domain: _execute_domain_command(d, action, executor))
 
-    if result.success:
-        print_success(f"Domain {name} stopped")
-    else:
-        print_error(_format_command_error(action, name, result))
-        raise typer.Exit(result.exit_code)
+        if result.success:
+            print_success(f"Domain {domain.name} stopped")
+        elif _is_already_stopped(result, domain):
+            print_warning(f"Domain {domain.name} already stopped")
+        else:
+            print_error(_format_command_error(action, domain.name, result))
+            failed += 1
+
+    if failed:
+        print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+        raise typer.Exit(1)
