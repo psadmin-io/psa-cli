@@ -164,7 +164,7 @@ def config_compare(
     ),
 ) -> None:
     """
-    Compare config across domains.
+    Compare config across domains
 
     Fetches config comparison from PSA-OPS for 2+ domains and displays
     differences. By default only shows 'different' and 'missing' rows.
