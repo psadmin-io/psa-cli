@@ -16,7 +16,7 @@ console = Console()
 
 app = typer.Typer(
     name="ops",
-    help="Manage PSA-OPS configuration",
+    help="Manage PSA-OPS API connections and data",
     no_args_is_help=True,
 )
 
