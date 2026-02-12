@@ -1,4 +1,4 @@
-"""OPS API client for psa tools."""
+"""PSA-OPS API client for psa tools."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class ApiClient:
         data: Optional[dict] = None,
         params: Optional[dict] = None,
     ) -> dict:
-        """Make HTTP request to OPS API."""
+        """Make HTTP request to PSA-OPS API."""
         url = f"{self.base_url.rstrip('/')}{path}"
 
         if params:
@@ -60,7 +60,7 @@ class ApiClient:
 
     def health(self) -> dict:
         """Check API health."""
-        return self._request("GET", "/health")
+        return self._request("GET", "/api/health")
 
     def list_environments(self) -> list[dict]:
         """List all environments."""
@@ -100,6 +100,19 @@ class ApiClient:
         }
         return self._request("POST", "/api/v1/nodes", data=data)
 
+    def update_node(self, node_id: str, **kwargs: Any) -> dict:
+        """Update an existing node via PATCH.
+
+        Args:
+            node_id: UUID of the node
+            **kwargs: Fields to update (e.g. ps_role="mid")
+
+        Returns:
+            Updated node dict
+        """
+        data = {k: v for k, v in kwargs.items() if v is not None}
+        return self._request("PATCH", f"/api/v1/nodes/{node_id}", data=data)
+
     def ingest_scan(
         self,
         hostname: str,
@@ -107,7 +120,7 @@ class ApiClient:
         environment_id: Optional[str] = None,
         scan_source: str = "psa-discover",
     ) -> dict:
-        """Push discovery results to OPS API."""
+        """Push discovery results to PSA-OPS."""
         data = {
             "hostname": hostname,
             "domains": domains,
@@ -117,7 +130,7 @@ class ApiClient:
         return self._request("POST", "/api/v1/scan/ingest", data=data, params=params)
 
     def get_tier_yaml(self, tier: str) -> str:
-        """Get tier-level YAML from OPS API."""
+        """Get tier-level YAML from PSA-OPS."""
         url = f"{self.base_url.rstrip('/')}/api/v1/yaml/tier/{tier}"
         req = urllib.request.Request(url, method="GET")
         try:
@@ -130,7 +143,7 @@ class ApiClient:
             raise ApiError(f"Connection failed: {e.reason}")
 
     def get_environment_yaml(self, environment: str) -> str:
-        """Get environment-level YAML from OPS API."""
+        """Get environment-level YAML from PSA-OPS."""
         url = f"{self.base_url.rstrip('/')}/api/v1/yaml/environment/{environment}"
         req = urllib.request.Request(url, method="GET")
         try:
@@ -166,7 +179,7 @@ class ApiClient:
             raise ApiError(f"Connection failed: {e.reason}")
 
     def sync_yaml(self, tier: Optional[str] = None, environments: Optional[str] = None) -> dict:
-        """Sync YAMLs from OPS API. Returns dict of {path: yaml_content}."""
+        """Sync YAMLs from PSA-OPS. Returns dict of {path: yaml_content}."""
         params = {}
         if tier:
             params['tier'] = tier
@@ -181,7 +194,7 @@ class ApiClient:
         yaml_content: str,
         replace_all: bool = True
     ) -> dict:
-        """Import YAML content to OPS API.
+        """Import YAML content to PSA-OPS.
 
         Args:
             level: "tier" or "environment"
@@ -254,7 +267,7 @@ class ApiClient:
             config_type: Config file type (e.g. psappsrv.cfg)
 
         Returns:
-            Comparison result from OPS API
+            Comparison result from PSA-OPS
         """
         query_parts = [
             ("domain_ids", did) for did in domain_ids
@@ -282,13 +295,23 @@ class ApiClient:
             "GET", f"/api/v1/domains/{domain_id}/drift", params=params or None
         )
 
+    def update_domain(self, domain_id: str, **kwargs: Any) -> dict:
+        """Update a domain via PATCH.
+
+        Args:
+            domain_id: UUID of the domain
+            **kwargs: Fields to update (e.g. status="Running")
+        """
+        data = {k: v for k, v in kwargs.items() if v is not None}
+        return self._request("PATCH", f"/api/v1/domains/{domain_id}", data=data)
+
     def get_drift_summary(self, domain_id: str) -> dict:
         """Get drift summary across all config types for a domain."""
         return self._request("GET", f"/api/v1/domains/{domain_id}/drift/summary")
 
 
 class ApiError(Exception):
-    """Error from OPS API."""
+    """Error from PSA-OPS API."""
 
     def __init__(self, message: str, status_code: Optional[int] = None):
         super().__init__(message)

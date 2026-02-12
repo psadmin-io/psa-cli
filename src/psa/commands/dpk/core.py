@@ -1,4 +1,4 @@
-"""DPK/Puppet operations commands."""
+"""DPK lifecycle management commands."""
 
 import os
 import shutil
@@ -120,7 +120,7 @@ class DeployType(str, Enum):
 
 app = typer.Typer(
     name="dpk",
-    help="DPK/Puppet operations (stage, setup, apply, status)",
+    help="Manage DPK lifecycle",
     no_args_is_help=True,
 )
 
@@ -645,7 +645,7 @@ def cleanup(
 @app.command("status")
 def status() -> None:
     """
-    Check DPK/Puppet installation status.
+    Check DPK installation status.
 
     Verifies:
     - Puppet is installed and accessible
@@ -756,7 +756,7 @@ def apply(
     ),
 ) -> None:
     """
-    Run puppet apply with DPK configuration.
+    Apply DPK configuration.
 
     Applies Puppet manifests to configure PeopleSoft domains.
     Requires DPK to be set up first.
@@ -1009,7 +1009,7 @@ def hiera(
     ),
 ) -> None:
     """
-    Install psa-ops hiera.yaml for tier/environment lookups.
+    Install custom hiera.yaml for tier/environment lookups.
 
     Copies hiera.yaml to both puppet/ and puppet/production/ directories,
     backing up existing files with .bak suffix.
@@ -1078,7 +1078,7 @@ def site(
     ),
 ) -> None:
     """
-    Install psa-ops site.pp for role-based node classification.
+    Install custom site.pp for role-based node classification.
 
     Copies site.pp to puppet/production/manifests/, backing up existing
     file with .bak suffix. Uses ps_role fact to select io_role class.
@@ -1134,7 +1134,7 @@ def modules(
     ),
 ) -> None:
     """
-    Deploy psa-ops Puppet modules (io_profile, io_role).
+    Deploy custom DPK modules (io_profile, io_role).
 
     Copies io_profile and io_role modules to puppet/production/modules/,
     backing up existing directories with .bak suffix.
@@ -1194,14 +1194,14 @@ def modules(
             print_success(f"Installed: {target}")
 
     if not dry_run:
-        print_success("psa-ops modules deployed (io_profile, io_role)")
+        print_success("Custom modules deployed (io_profile, io_role)")
 
 
 # --- Helper functions for sync command ---
 
 
 def _get_source_path(source: Optional[Path]) -> Path:
-    """Resolve psa-ops-node source path from CLI arg, IO_HOME, or package location."""
+    """Resolve source path from CLI arg, IO_HOME, or package location."""
     if source:
         return source.resolve()
 
@@ -1325,13 +1325,13 @@ def sync(
         None,
         "--source",
         "-s",
-        help="psa-ops-node source path (or $IO_HOME)",
+        help="Source path (or $IO_HOME)",
     ),
     sync_ops: bool = typer.Option(
         False,
         "--ops",
         "-r",
-        help="Also sync Hiera data from OPS API",
+        help="Also sync Hiera data from PSA-OPS",
     ),
     tier: Optional[str] = typer.Option(
         None,
@@ -1353,10 +1353,10 @@ def sync(
     ),
 ) -> None:
     """
-    Sync all psa-ops DPK files to local installation.
+    Sync custom DPK files to local installation.
 
     Deploys hiera.yaml, site.pp, and io_profile/io_role modules in one command.
-    Optionally syncs Hiera data from OPS API with --ops flag.
+    Optionally syncs Hiera data from PSA-OPS with --ops flag.
 
     Examples:
         psa dpk sync --dpk-path /opt/oracle/psft/dpk
@@ -1390,7 +1390,7 @@ def sync(
         console.print("[yellow]Dry run - no changes will be made[/yellow]")
         console.print()
 
-    console.print("[bold]Syncing psa-ops DPK configuration...[/bold]")
+    console.print("[bold]Syncing custom DPK configuration...[/bold]")
 
     # Deploy hiera.yaml
     if not _deploy_hiera_files(resolved_dpk, dry_run):
@@ -1407,7 +1407,7 @@ def sync(
     # Optionally sync OPS data
     if sync_ops:
         console.print()
-        print_info("Syncing Hiera data from OPS...")
+        print_info("Syncing Hiera data from PSA-OPS...")
         # Import here to avoid circular dependency
         from psa.commands.dpk.data import sync as data_sync
 
@@ -1424,10 +1424,10 @@ def sync(
                 quiet=True,
             )
         except Exception as e:
-            print_warning(f"OPS sync failed: {e}")
+            print_warning(f"PSA-OPS sync failed: {e}")
             print_info("Run 'psa dpk data sync' manually to retry")
 
     console.print()
     if not dry_run:
-        print_success("psa-ops DPK sync complete")
+        print_success("Custom DPK sync complete")
     print_info("Next: psa dpk apply --role <role>")

@@ -19,7 +19,7 @@ CONFIG_PATH = Path.home() / ".config" / "psa" / "config.yaml"
 
 @dataclass
 class OpsConfig:
-    """OPS API connection configuration."""
+    """PSA-OPS connection configuration."""
 
     url: Optional[str] = None
     node_id: Optional[str] = None
@@ -35,7 +35,7 @@ class OpsConfig:
     suppress_fact_warnings: bool = False
 
     def is_configured(self) -> bool:
-        """Check if OPS API is configured."""
+        """Check if PSA-OPS is configured."""
         return self.url is not None
 
 
@@ -47,10 +47,10 @@ class PsaConfig:
     io_base: Path = field(default_factory=lambda: Path(DEFAULT_IO_BASE))
     ps_cfg_home: Optional[Path] = None
     ps_home: Optional[Path] = None
-    domain_user: str = "psadm2"
+    runtime_user: str = "psadm2"
     ops: OpsConfig = field(default_factory=OpsConfig)
     # Domain management settings
-    sudo_enabled: bool = True  # Use sudo to run commands as domain_user
+    sudo_enabled: bool = True  # Use sudo to run commands as runtime_user
     parallel_boot: bool = False  # Use parallelboot instead of boot
     multi_homes: list = field(default_factory=list)  # Additional PS_CFG_HOME paths
 
@@ -104,8 +104,8 @@ class PsaConfig:
                     config.ps_cfg_home = Path(ps_cfg_home)
                 if ps_home := data.get("ps_home"):
                     config.ps_home = Path(ps_home)
-                if domain_user := data.get("domain_user"):
-                    config.domain_user = domain_user
+                if runtime_user := data.get("runtime_user", data.get("domain_user")):
+                    config.runtime_user = runtime_user
 
                 # Domain management settings
                 if "sudo_enabled" in data:
@@ -157,8 +157,8 @@ class PsaConfig:
             data["ps_cfg_home"] = str(self.ps_cfg_home)
         if self.ps_home:
             data["ps_home"] = str(self.ps_home)
-        if self.domain_user != "psadm2":
-            data["domain_user"] = self.domain_user
+        if self.runtime_user != "psadm2":
+            data["runtime_user"] = self.runtime_user
 
         # Domain management settings (only save non-defaults)
         if not self.sudo_enabled:

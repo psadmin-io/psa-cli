@@ -1,4 +1,4 @@
-"""Initialize psa configuration."""
+"""Initialize psa configuration with PSA-OPS."""
 
 from pathlib import Path
 from typing import Optional
@@ -19,7 +19,7 @@ def init(
         None,
         "--ops-url",
         "-r",
-        help="OPS API URL (e.g., http://ops.psaops.local:8000). If omitted, runs in standalone mode.",
+        help="PSA-OPS URL (e.g., http://ops.psaops.local:8000). If omitted, runs in standalone mode.",
     ),
     ps_cfg_home: Optional[str] = typer.Option(
         None,
@@ -27,17 +27,22 @@ def init(
         "-c",
         help="PS_CFG_HOME path (auto-detected if not specified)",
     ),
-    domain_user: Optional[str] = typer.Option(
+    runtime_user: Optional[str] = typer.Option(
         None,
-        "--domain-user",
+        "--runtime-user",
         "-u",
-        help="Domain user (default: psadm2)",
+        help="Runtime user (default: psadm2)",
     ),
     environment_id: Optional[str] = typer.Option(
         None,
         "--environment-id",
         "-e",
         help="Environment ID (ops mode only, skips auto-detection)",
+    ),
+    role: Optional[str] = typer.Option(
+        None,
+        "--role",
+        help="Node role: app, web, prcs, mid, webapp",
     ),
     non_interactive: bool = typer.Option(
         False,
@@ -47,34 +52,34 @@ def init(
     ),
 ) -> None:
     """
-    Initialize psa configuration.
+    Initialize psa with PSA-OPS.
 
     Standalone mode (no --ops-url):
         Configures local paths and discovers domains.
 
-    OPS mode (with --ops-url):
-        Connects to OPS API, registers node, and saves connection config.
+    PSA-OPS mode (with --ops-url):
+        Connects to PSA-OPS, registers node, and saves connection config.
 
     Examples:
-        psa init                                    # Standalone, auto-detect paths
-        psa init --ps-cfg-home /u01/app/psoft/cfg   # Standalone, explicit path
-        psa init --ops-url http://ops:8000          # OPS mode
+        psa config setup                                    # Standalone, auto-detect paths
+        psa config setup --ps-cfg-home /u01/app/psoft/cfg   # Standalone, explicit path
+        psa config setup --ops-url http://ops:8000          # PSA-OPS mode
     """
     config = get_config()
 
     if ops_url:
-        _init_ops_mode(config, ops_url, environment_id, non_interactive)
+        _init_ops_mode(config, ops_url, environment_id, role, non_interactive)
     else:
-        _init_standalone_mode(config, ps_cfg_home, domain_user, non_interactive)
+        _init_standalone_mode(config, ps_cfg_home, runtime_user, non_interactive)
 
 
 def _init_standalone_mode(
     config,
     ps_cfg_home: Optional[str],
-    domain_user: Optional[str],
+    runtime_user: Optional[str],
     non_interactive: bool,
 ) -> None:
-    """Initialize in standalone mode (no OPS connection)."""
+    """Initialize in standalone mode (no PSA-OPS connection)."""
     console.print("[bold]Initializing psa (standalone mode)[/bold]\n")
 
     # Configure PS_CFG_HOME
@@ -93,13 +98,13 @@ def _init_standalone_mode(
             )
             config.ps_cfg_home = Path(path_input)
 
-    # Configure domain user
-    if domain_user:
-        config.domain_user = domain_user
+    # Configure runtime user
+    if runtime_user:
+        config.runtime_user = runtime_user
     elif not non_interactive:
-        config.domain_user = Prompt.ask(
-            "Domain user",
-            default=config.domain_user,
+        config.runtime_user = Prompt.ask(
+            "Runtime user",
+            default=config.runtime_user,
         )
 
     # Discover domains
@@ -121,34 +126,35 @@ def _init_standalone_mode(
     console.print(f"\n[green]✓[/green] Configuration saved to [cyan]{CONFIG_PATH}[/cyan]")
 
     console.print("\nYou can now use:")
-    console.print("  [cyan]psa discover[/cyan]      List domains")
+    console.print("  [cyan]psa domain list[/cyan]   List domains")
     console.print("  [cyan]psa domain status[/cyan] Check domain status")
     console.print("  [cyan]psa domain start[/cyan]  Start a domain")
-    console.print("\nTo connect to OPS later:")
-    console.print("  [cyan]psa init --ops-url http://ops:8000[/cyan]")
+    console.print("\nTo connect to PSA-OPS later:")
+    console.print("  [cyan]psa config setup --ops-url http://ops:8000[/cyan]")
 
 
 def _init_ops_mode(
     config,
     ops_url: str,
     environment_id: Optional[str],
+    role: Optional[str],
     non_interactive: bool,
 ) -> None:
-    """Initialize with OPS API connection."""
+    """Initialize with PSA-OPS connection."""
     from psa.core.api import ApiClient, ApiError, get_hostname, get_ip_address
 
     hostname = get_hostname()
     console.print(f"[bold]Initializing psa for [cyan]{hostname}[/cyan][/bold]\n")
 
-    # Test OPS connection
-    console.print(f"Connecting to OPS: {ops_url}")
+    # Test PSA-OPS connection
+    console.print(f"Connecting to PSA-OPS: {ops_url}")
     client = ApiClient(ops_url)
 
     try:
         health = client.health()
-        console.print(f"[green]✓[/green] OPS connected (v{health.get('version', '?')})\n")
+        console.print(f"[green]✓[/green] PSA-OPS connected (v{health.get('version', '?')})\n")
     except ApiError as e:
-        console.print(f"[red]✗[/red] OPS connection failed: {e}")
+        console.print(f"[red]✗[/red] PSA-OPS connection failed: {e}")
         raise typer.Exit(1)
 
     # Fetch environments
@@ -159,8 +165,8 @@ def _init_ops_mode(
         raise typer.Exit(1)
 
     if not environments:
-        console.print("[red]✗[/red] No environments found in OPS")
-        console.print("Create an environment in the OPS UI first")
+        console.print("[red]✗[/red] No environments found in PSA-OPS")
+        console.print("Create an environment in the PSA-OPS UI first")
         raise typer.Exit(1)
 
     # Build environment lookup by db_name
@@ -252,22 +258,32 @@ def _init_ops_mode(
     # Prompt for node-level facts
     console.print("\n[bold]Node configuration:[/bold]")
 
-    if non_interactive:
-        console.print("[red]✗[/red] Node facts required in non-interactive mode")
-        console.print("Role must be specified")
+    valid_roles = ["app", "web", "prcs", "mid", "webapp"]
+    if role and role in valid_roles:
+        ps_role = role
+    elif non_interactive:
+        console.print("[red]✗[/red] Node role required in non-interactive mode")
+        console.print("Use --role [app|web|prcs|mid|webapp]")
         raise typer.Exit(1)
-
-    ps_role = Prompt.ask(
-        "Role",
-        choices=["app", "web", "prcs", "mid", "webapp"],
-        default="app",
-    )
+    else:
+        ps_role = Prompt.ask(
+            "Role",
+            choices=valid_roles,
+            default="app",
+        )
 
     # Check if node exists
     node = client.get_node_by_hostname(hostname)
     if node:
         console.print(f"[green]✓[/green] Node already registered: {node['id'][:8]}...")
         node_id = node["id"]
+        # Update role if it differs from what's in the API
+        if ps_role and node.get("ps_role") != ps_role:
+            try:
+                client.update_node(node_id, ps_role=ps_role)
+                console.print(f"[green]✓[/green] Role updated to [cyan]{ps_role}[/cyan]")
+            except ApiError as e:
+                console.print(f"[yellow]![/yellow] Failed to update role: {e}")
     else:
         # Register node
         ip_address = get_ip_address()
@@ -306,5 +322,5 @@ def _init_ops_mode(
     )
 
     console.print("\nYou can now use:")
-    console.print("  [cyan]psa discover --push[/cyan]  Push domains to OPS")
-    console.print("  [cyan]psa ops status[/cyan]       Check connection status")
+    console.print("  [cyan]psa ops report[/cyan]    Report domains to PSA-OPS")
+    console.print("  [cyan]psa ops status[/cyan]    Check connection status")

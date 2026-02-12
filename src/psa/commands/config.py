@@ -6,6 +6,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from psa.commands import init
 from psa.core.config import CONFIG_PATH, PsaConfig, get_config
 from psa.core.domain_cache import get_cached_domain_id
 from psa.core.api import ApiClient, ApiError
@@ -15,18 +16,21 @@ console = Console()
 
 app = typer.Typer(
     name="config",
-    help="Manage psa configuration",
+    help="Manage PSA-CLI configuration",
     no_args_is_help=True,
 )
 
 
-@app.command(name="init")
+app.command(name="setup")(init.init)
+
+
+@app.command(name="init", hidden=True)
 def config_init(
     ops_url: str = typer.Option(
         ...,
         "--ops-url",
         "-r",
-        help="OPS API URL",
+        help="PSA-OPS URL",
     ),
     node_id: str = typer.Option(
         ...,
@@ -42,17 +46,17 @@ def config_init(
     ),
 ) -> None:
     """
-    Initialize config from OPS API (non-interactive).
+    Initialize config from PSA-OPS (non-interactive).
 
-    Fetches configuration for this node from OPS and writes
+    Fetches configuration for this node from PSA-OPS and writes
     it to the local config file. Used for automated setup via Ansible.
 
     Examples:
         psa config init -r http://ops.psaops.local:8000 -n abc-123-uuid
         psa config init -r http://ops:8000 -n abc-123-uuid -e env-456-uuid
     """
-    console.print("Fetching config from OPS...")
-    console.print(f"  OPS: [cyan]{ops_url}[/cyan]")
+    console.print("Fetching config from PSA-OPS...")
+    console.print(f"  PSA-OPS: [cyan]{ops_url}[/cyan]")
     console.print(f"  Node ID: [cyan]{node_id[:8]}...[/cyan]")
     if environment_id:
         console.print(f"  Environment ID: [cyan]{environment_id[:8]}...[/cyan]")
@@ -103,10 +107,10 @@ def config_show() -> None:
         console.print(f"  PS_CFG_HOME: {config.ps_cfg_home}")
     if config.ps_home:
         console.print(f"  PS_HOME: {config.ps_home}")
-    console.print(f"  Domain user: {config.domain_user}")
+    console.print(f"  Runtime user: {config.runtime_user}")
 
     if config.ops.is_configured():
-        console.print("\n[bold]OPS:[/bold]")
+        console.print("\n[bold]PSA-OPS:[/bold]")
         console.print(f"  URL: {config.ops.url}")
         if config.ops.node_id:
             console.print(f"  Node ID: {config.ops.node_id[:8]}...")
@@ -119,17 +123,17 @@ def config_show() -> None:
         if config.ops.ps_role:
             console.print(f"  Role: {config.ops.ps_role}")
     else:
-        console.print("\n[yellow]OPS not configured[/yellow]")
+        console.print("\n[yellow]PSA-OPS not configured[/yellow]")
 
 
 def _resolve_domain_id(client: ApiClient, name: str) -> str:
-    """Resolve domain name to UUID. Checks local cache first, then OPS API."""
+    """Resolve domain name to UUID. Checks local cache first, then PSA-OPS."""
     cached = get_cached_domain_id(name)
     if cached:
         return cached
     domain = client.resolve_domain(name)
     if not domain:
-        print_error(f"Domain '{name}' not found in OPS")
+        print_error(f"Domain '{name}' not found in PSA-OPS")
         raise typer.Exit(1)
     return domain["id"]
 
@@ -176,7 +180,7 @@ def config_compare(
 
     config = get_config()
     if not config.ops.is_configured():
-        print_error("OPS not configured. Run 'psa init' first")
+        print_error("PSA-OPS not configured. Run 'psa config setup' first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
