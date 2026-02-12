@@ -75,12 +75,13 @@ def _resolve_targets(
     return domains
 
 
-def _confirm_targets(domains: List[DomainInfo], action: str) -> bool:
-    """Prompt user to confirm action on multiple domains.
+def _confirm_targets(domains: List[DomainInfo], action: str, all_mode: bool = False) -> bool:
+    """Prompt user to confirm action on domains.
 
-    Auto-confirms for single domain, QUIET mode, or skip_domain_confirm config.
+    Auto-confirms for single named domain, QUIET mode, or skip_domain_confirm config.
+    Always prompts in all-mode (no name specified), even if only 1 domain found.
     """
-    if len(domains) == 1:
+    if len(domains) == 1 and not all_mode:
         return True
     if get_verbosity() == Verbosity.QUIET:
         return True
@@ -94,6 +95,7 @@ def _confirm_targets(domains: List[DomainInfo], action: str) -> bool:
     for d in domains:
         table.add_row(d.name, d.domain_type)
     console.print(table)
+    console.print("[dim]Tip: psa config set skip_domain_confirm true to skip this prompt[/dim]")
 
     return typer.confirm(f"{action.capitalize()} {len(domains)} domain(s)?")
 
@@ -260,7 +262,7 @@ def bounce(
         psa domain bounce --type app   # bounce all app domains
     """
     domains = _resolve_targets(name, domain_type)
-    if not _confirm_targets(domains, "bounce"):
+    if not _confirm_targets(domains, "bounce", all_mode=name is None):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -322,7 +324,7 @@ def configure(
     if name is not None and domains[0].domain_type == "pia":
         print_error("Configure not supported for PIA domains")
         raise typer.Exit(1)
-    if not _confirm_targets(domains, "configure"):
+    if not _confirm_targets(domains, "configure", all_mode=name is None):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -502,7 +504,7 @@ def flush(
     if name is not None and domains[0].domain_type == "pia":
         print_warning("Flush not applicable for PIA domains")
         return
-    if not _confirm_targets(domains, "flush"):
+    if not _confirm_targets(domains, "flush", all_mode=name is None):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -541,7 +543,7 @@ def kill(
         psa domain kill --type app   # kill all app domains
     """
     domains = _resolve_targets(name, domain_type)
-    if not _confirm_targets(domains, "kill"):
+    if not _confirm_targets(domains, "kill", all_mode=name is None):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -647,7 +649,7 @@ def purge(
         psa domain purge --type app   # purge all app domains
     """
     domains = _resolve_targets(name, domain_type)
-    if not _confirm_targets(domains, "purge"):
+    if not _confirm_targets(domains, "purge", all_mode=name is None):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -692,7 +694,7 @@ def restart(
         psa domain restart --type app   # restart all app domains
     """
     domains = _resolve_targets(name, domain_type)
-    if not _confirm_targets(domains, "restart"):
+    if not _confirm_targets(domains, "restart", all_mode=name is None):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -805,7 +807,7 @@ def start(
         psa domain start --type app   # start all app domains
     """
     domains = _resolve_targets(name, domain_type)
-    if not _confirm_targets(domains, "start"):
+    if not _confirm_targets(domains, "start", all_mode=name is None):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -954,7 +956,7 @@ def stop(
         psa domain stop --type app   # stop all app domains
     """
     domains = _resolve_targets(name, domain_type)
-    if not _confirm_targets(domains, "stop"):
+    if not _confirm_targets(domains, "stop", all_mode=name is None):
         raise typer.Abort()
 
     executor = _get_executor()
