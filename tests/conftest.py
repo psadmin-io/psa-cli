@@ -62,4 +62,5 @@ def mock_config(tmp_cfg_home):
     return PsaConfig(
         ps_cfg_home=tmp_cfg_home,
         ops=OpsConfig(),
+        sudo_enabled=False,
     )
