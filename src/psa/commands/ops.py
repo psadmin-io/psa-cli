@@ -214,12 +214,6 @@ def report(
         "-j",
         help="Output as JSON",
     ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help="Show verbose output including config details",
-    ),
     ps_cfg_home: Optional[str] = typer.Option(
         None,
         "--ps-cfg-home",
@@ -243,7 +237,6 @@ def report(
     Examples:
         psa ops report
         psa ops report --type app
-        psa ops report --verbose
     """
     config = get_config()
     hostname = get_hostname()
