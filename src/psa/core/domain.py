@@ -194,25 +194,42 @@ class DomainDiscovery:
                 continue
 
             domain_dir = webserv_path / name
-
-            # Check for configuration.properties or config.xml
-            config_props = domain_dir / "applications" / "peoplesoft" / "configuration.properties"
             config_xml = domain_dir / "config" / "config.xml"
 
-            if self.fileops.exists(config_props) or self.fileops.exists(config_xml):
-                domain = DomainInfo(
-                    name=name,
-                    domain_type="pia",
-                    path=domain_dir,
-                    ps_cfg_home=cfg_home,
-                )
-                if self.fileops.exists(config_props):
-                    domain.config = self._parse_pia_config(config_props)
-                    raw_config = self._read_config_file(config_props)
-                    if raw_config:
-                        domain.config_files.append(raw_config)
-                domain.status = self._check_pia_status(domain_dir)
-                domains.append(domain)
+            # config.xml is the reliable existence indicator
+            if not self.fileops.exists(config_xml):
+                continue
+
+            domain = DomainInfo(
+                name=name,
+                domain_type="pia",
+                path=domain_dir,
+                ps_cfg_home=cfg_home,
+            )
+
+            # Find configuration.properties — flat path first, then DPK WAR path
+            config_props = None
+            flat_path = domain_dir / "applications" / "peoplesoft" / "configuration.properties"
+            if self.fileops.exists(flat_path):
+                config_props = flat_path
+            else:
+                psftdocs = domain_dir / "applications" / "peoplesoft" / "PORTAL.war" / "WEB-INF" / "psftdocs"
+                if self.fileops.exists(psftdocs):
+                    for site_name, site_is_dir in self.fileops.listdir(psftdocs):
+                        if site_is_dir:
+                            candidate = psftdocs / site_name / "configuration.properties"
+                            if self.fileops.exists(candidate):
+                                config_props = candidate
+                                break
+
+            if config_props:
+                domain.config = self._parse_pia_config(config_props)
+                raw_config = self._read_config_file(config_props)
+                if raw_config:
+                    domain.config_files.append(raw_config)
+
+            domain.status = self._check_pia_status(domain_dir)
+            domains.append(domain)
 
         return domains
 
@@ -302,13 +319,17 @@ class DomainDiscovery:
         return "stopped"
 
     def _check_prcs_status(self, domain_path: Path) -> str:
-        """Check if a prcs domain is running."""
-        return "unknown"
+        """Check if a prcs domain is running via filesystem."""
+        if self.fileops.exists(domain_path / "LOGS" / "TUXLOG"):
+            return "unknown"  # can't tell running vs stopped from file alone
+        return "stopped"
 
     def _check_pia_status(self, domain_path: Path) -> str:
-        """Check if a PIA domain is running."""
-        # Check for WebLogic server running
-        return "unknown"
+        """Check if a PIA domain is running via filesystem."""
+        pid_file = domain_path / "servers" / "PIA" / "tmp" / "PIA.pid"
+        if self.fileops.exists(pid_file):
+            return "unknown"  # PID exists, might be running
+        return "stopped"
 
 
 def discover_domains(config: Optional[PsaConfig] = None) -> list[dict[str, Any]]:

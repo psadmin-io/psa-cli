@@ -50,9 +50,21 @@ def tmp_cfg_home(tmp_path):
     prcs_dir.mkdir(parents=True)
     (prcs_dir / "psprcs.cfg").write_text(SAMPLE_PSPRCS_CFG)
 
-    pia_dir = cfg_home / "webserv" / "TESTPIA" / "applications" / "peoplesoft"
+    # PIA domain (flat layout) — needs config.xml for existence detection
+    pia_base = cfg_home / "webserv" / "TESTPIA"
+    (pia_base / "config").mkdir(parents=True)
+    (pia_base / "config" / "config.xml").write_text("<config/>")
+    pia_dir = pia_base / "applications" / "peoplesoft"
     pia_dir.mkdir(parents=True)
     (pia_dir / "configuration.properties").write_text(SAMPLE_CONFIGURATION_PROPERTIES)
+
+    # PIA domain (DPK layout) — config.properties under PORTAL.war
+    dpk_base = cfg_home / "webserv" / "DPKPIA"
+    (dpk_base / "config").mkdir(parents=True)
+    (dpk_base / "config" / "config.xml").write_text("<config/>")
+    dpk_props = dpk_base / "applications" / "peoplesoft" / "PORTAL.war" / "WEB-INF" / "psftdocs" / "ps"
+    dpk_props.mkdir(parents=True)
+    (dpk_props / "configuration.properties").write_text(SAMPLE_CONFIGURATION_PROPERTIES)
 
     return cfg_home
 

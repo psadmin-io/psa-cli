@@ -73,24 +73,35 @@ class TestDiscoverPrcsDomains:
 class TestDiscoverPiaDomains:
     """Test PIA domain discovery."""
 
-    def test_discovers_pia_domain(self, mock_config, tmp_cfg_home):
+    def test_discovers_pia_domains(self, mock_config, tmp_cfg_home):
         discovery = DomainDiscovery(mock_config)
         domains = discovery.discover_pia_domains()
 
-        assert len(domains) == 1
-        dom = domains[0]
-        assert dom.name == "TESTPIA"
-        assert dom.domain_type == "pia"
+        names = {d.name for d in domains}
+        assert names == {"TESTPIA", "DPKPIA"}
+        for dom in domains:
+            assert dom.domain_type == "pia"
+
+    def test_flat_pia_config_values(self, mock_config, tmp_cfg_home):
+        discovery = DomainDiscovery(mock_config)
+        domains = discovery.discover_pia_domains()
+        dom = [d for d in domains if d.name == "TESTPIA"][0]
+
         assert dom.path == tmp_cfg_home / "webserv" / "TESTPIA"
+        assert dom.config["app_server"] == "APPDOM"
+        assert dom.config["jolt_port"] == "9100"
+        assert dom.config["web_profile"] == "HCM"
 
-    def test_pia_config_values(self, mock_config):
+    def test_dpk_pia_config_values(self, mock_config, tmp_cfg_home):
+        """DPK layout: properties found under PORTAL.war/WEB-INF/psftdocs/*/."""
         discovery = DomainDiscovery(mock_config)
         domains = discovery.discover_pia_domains()
-        cfg = domains[0].config
+        dom = [d for d in domains if d.name == "DPKPIA"][0]
 
-        assert cfg["app_server"] == "APPDOM"
-        assert cfg["jolt_port"] == "9100"
-        assert cfg["web_profile"] == "HCM"
+        assert dom.path == tmp_cfg_home / "webserv" / "DPKPIA"
+        assert dom.config["app_server"] == "APPDOM"
+        assert dom.config["jolt_port"] == "9100"
+        assert len(dom.config_files) == 1
 
 
 class TestDiscoverAll:
@@ -102,13 +113,13 @@ class TestDiscoverAll:
 
         types = {d.domain_type for d in domains}
         assert types == {"app", "prcs", "pia"}
-        assert len(domains) == 3
+        assert len(domains) == 4
 
     def test_returns_correct_names(self, mock_config):
         discovery = DomainDiscovery(mock_config)
         domains = discovery.discover_all()
         names = {d.name for d in domains}
-        assert names == {"TESTDOM", "TESTPRCS", "TESTPIA"}
+        assert names == {"TESTDOM", "TESTPRCS", "TESTPIA", "DPKPIA"}
 
 
 class TestRawConfigCapture:
@@ -138,7 +149,7 @@ class TestRawConfigCapture:
     def test_pia_config_file_captured(self, mock_config):
         discovery = DomainDiscovery(mock_config)
         domains = discovery.discover_pia_domains()
-        dom = domains[0]
+        dom = [d for d in domains if d.name == "TESTPIA"][0]
 
         assert len(dom.config_files) == 1
         raw = dom.config_files[0]
