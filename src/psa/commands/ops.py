@@ -1,4 +1,4 @@
-"""OPS management commands."""
+"""PSA-OPS management commands."""
 
 from typing import Optional
 
@@ -16,58 +16,18 @@ console = Console()
 
 app = typer.Typer(
     name="ops",
-    help="Manage OPS API connection and data",
+    help="Manage PSA-OPS configuration",
     no_args_is_help=True,
 )
 
 
-@app.command(name="status")
-def status() -> None:
-    """Show OPS API configuration and connection status."""
-    config = get_config()
-
-    console.print("[bold]OPS Configuration[/bold]\n")
-
-    if not config.ops.is_configured():
-        console.print("[yellow]Not configured[/yellow]")
-        console.print("\nRun [cyan]psa config setup --ops-url <url>[/cyan] to configure")
-        return
-
-    console.print(f"Config file: [cyan]{CONFIG_PATH}[/cyan]")
-    console.print(f"OPS URL: [cyan]{config.ops.url}[/cyan]")
-
-    if config.ops.node_id:
-        console.print(f"Node ID: [cyan]{config.ops.node_id[:8]}...[/cyan]")
-    if config.ops.environment_name:
-        console.print(f"Environment: [cyan]{config.ops.environment_name}[/cyan]")
-    if config.ops.environment_id:
-        console.print(f"Environment ID: [dim]{config.ops.environment_id[:8]}...[/dim]")
-
-    # Test connection
-    console.print("\n[bold]Connection Status[/bold]")
-    client = ApiClient(config.ops.url)
-    try:
-        health = client.health()
-        console.print(f"[green]✓[/green] Connected (v{health.get('version', '?')})")
-
-        # Verify node still exists
-        if config.ops.node_id:
-            node = client.get_node_by_hostname(get_hostname())
-            if node:
-                console.print("[green]✓[/green] Node verified")
-            else:
-                console.print("[yellow]![/yellow] Node not found in OPS")
-    except ApiError as e:
-        console.print(f"[red]✗[/red] Connection failed: {e}")
-
-
 @app.command(name="environments")
 def list_environments() -> None:
-    """List environments from OPS API."""
+    """List environments from PSA-OPS."""
     config = get_config()
 
     if not config.ops.is_configured():
-        console.print("[red]OPS not configured[/red]")
+        console.print("[red]PSA-OPS not configured[/red]")
         console.print("Run [cyan]psa config setup --ops-url <url>[/cyan] first")
         raise typer.Exit(1)
 
@@ -95,7 +55,7 @@ def list_environments() -> None:
         # Mark current environment
         name = env["name"]
         if env["id"] == config.ops.environment_id:
-            name = f"[green]{name} ✓[/green]"
+            name = f"[green]{name} \u2713[/green]"
 
         table.add_row(
             env["id"][:8] + "...",
@@ -111,11 +71,11 @@ def list_environments() -> None:
 
 @app.command(name="nodes")
 def list_nodes() -> None:
-    """List nodes from OPS API."""
+    """List nodes from PSA-OPS."""
     config = get_config()
 
     if not config.ops.is_configured():
-        console.print("[red]OPS not configured[/red]")
+        console.print("[red]PSA-OPS not configured[/red]")
         console.print("Run [cyan]psa config setup --ops-url <url>[/cyan] first")
         raise typer.Exit(1)
 
@@ -143,7 +103,7 @@ def list_nodes() -> None:
         # Mark current node
         name = node["name"]
         if node.get("hostname") == hostname:
-            name = f"[green]{name} ✓[/green]"
+            name = f"[green]{name} \u2713[/green]"
 
         status = node.get("status", "unknown")
         status_style = "green" if status == "Active" else "yellow"
@@ -173,12 +133,12 @@ def register(
         help="Node role: app, web, prcs, mid, webapp",
     ),
 ) -> None:
-    """Register or re-register this node with OPS."""
+    """Register this node with PSA-OPS."""
     config = get_config()
     hostname = get_hostname()
 
     if not config.ops.is_configured():
-        console.print("[red]OPS not configured[/red]")
+        console.print("[red]PSA-OPS not configured[/red]")
         console.print("Run [cyan]psa config setup --ops-url <url>[/cyan] first")
         raise typer.Exit(1)
 
@@ -207,9 +167,9 @@ def register(
                 config.ops.ps_role = role
                 config.ops.node_id = existing["id"]
                 config.save()
-                console.print(f"[green]✓[/green] Role updated to [cyan]{role}[/cyan]")
+                console.print(f"[green]\u2713[/green] Role updated to [cyan]{role}[/cyan]")
             except ApiError as e:
-                console.print(f"[red]✗[/red] Failed to update role: {e}")
+                console.print(f"[red]\u2717[/red] Failed to update role: {e}")
                 raise typer.Exit(1)
         return
 
@@ -227,16 +187,16 @@ def register(
             environment_id=env_id,
             **create_kwargs,
         )
-        console.print(f"[green]✓[/green] Node registered: {node['id'][:8]}...")
+        console.print(f"[green]\u2713[/green] Node registered: {node['id'][:8]}...")
 
         # Update config
         config.ops.node_id = node["id"]
         if role:
             config.ops.ps_role = role
         config.save()
-        console.print("[green]✓[/green] Configuration updated")
+        console.print("[green]\u2713[/green] Configuration updated")
     except ApiError as e:
-        console.print(f"[red]✗[/red] Registration failed: {e}")
+        console.print(f"[red]\u2717[/red] Registration failed: {e}")
         raise typer.Exit(1)
 
 
@@ -275,10 +235,10 @@ def report(
     ),
 ) -> None:
     """
-    Discover domains and report to OPS API.
+    Discover domains and sync to PSA-OPS.
 
     Scans local domains and pushes results to the configured
-    OPS API. Requires OPS to be configured via 'psa config setup'.
+    PSA-OPS. Requires PSA-OPS to be configured via 'psa config setup'.
 
     Examples:
         psa ops report
@@ -289,7 +249,7 @@ def report(
     hostname = get_hostname()
 
     if not config.ops.is_configured():
-        print_error("OPS not configured. Run 'psa config setup' first")
+        print_error("PSA-OPS not configured. Run 'psa config setup' first")
         raise typer.Exit(1)
 
     if ps_cfg_home:
@@ -345,3 +305,43 @@ def report(
     except ApiError as e:
         print_error(f"Report failed: {e}")
         raise typer.Exit(1)
+
+
+@app.command(name="status")
+def status() -> None:
+    """Show PSA-OPS connection status."""
+    config = get_config()
+
+    console.print("[bold]PSA-OPS Configuration[/bold]\n")
+
+    if not config.ops.is_configured():
+        console.print("[yellow]Not configured[/yellow]")
+        console.print("\nRun [cyan]psa config setup --ops-url <url>[/cyan] to configure")
+        return
+
+    console.print(f"Config file: [cyan]{CONFIG_PATH}[/cyan]")
+    console.print(f"PSA-OPS URL: [cyan]{config.ops.url}[/cyan]")
+
+    if config.ops.node_id:
+        console.print(f"Node ID: [cyan]{config.ops.node_id[:8]}...[/cyan]")
+    if config.ops.environment_name:
+        console.print(f"Environment: [cyan]{config.ops.environment_name}[/cyan]")
+    if config.ops.environment_id:
+        console.print(f"Environment ID: [dim]{config.ops.environment_id[:8]}...[/dim]")
+
+    # Test connection
+    console.print("\n[bold]Connection Status[/bold]")
+    client = ApiClient(config.ops.url)
+    try:
+        health = client.health()
+        console.print(f"[green]\u2713[/green] Connected (v{health.get('version', '?')})")
+
+        # Verify node still exists
+        if config.ops.node_id:
+            node = client.get_node_by_hostname(get_hostname())
+            if node:
+                console.print("[green]\u2713[/green] Node verified")
+            else:
+                console.print("[yellow]![/yellow] Node not found in PSA-OPS")
+    except ApiError as e:
+        console.print(f"[red]\u2717[/red] Connection failed: {e}")

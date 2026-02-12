@@ -19,7 +19,7 @@ CONFIG_PATH = Path.home() / ".config" / "psa" / "config.yaml"
 
 @dataclass
 class OpsConfig:
-    """OPS API connection configuration."""
+    """PSA-OPS connection configuration."""
 
     url: Optional[str] = None
     node_id: Optional[str] = None
@@ -35,7 +35,7 @@ class OpsConfig:
     suppress_fact_warnings: bool = False
 
     def is_configured(self) -> bool:
-        """Check if OPS API is configured."""
+        """Check if PSA-OPS is configured."""
         return self.url is not None
 
 

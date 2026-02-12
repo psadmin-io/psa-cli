@@ -21,7 +21,7 @@ console = Console()
 
 app = typer.Typer(
     name="domain",
-    help="Manage PeopleSoft domains (start, stop, status, list)",
+    help="Manage PeopleSoft domains",
     no_args_is_help=True,
 )
 
@@ -87,13 +87,13 @@ def _execute_domain_command(
 
 
 def _report_status_to_api(name: str, status_str: str) -> None:
-    """Report domain status to OPS API. Never fails the command."""
+    """Report domain status to PSA-OPS. Never fails the command."""
     status_map = {"running": "Running", "stopped": "Stopped"}
     api_status = status_map.get(status_str, "Unknown")
 
     config = get_config()
     if not config.ops.is_configured():
-        print_warning("OPS not configured; skipping report")
+        print_warning("PSA-OPS not configured; skipping report")
         return
 
     domain_id = get_cached_domain_id(name)
@@ -148,372 +148,6 @@ def _format_status_json(domain: DomainInfo, result: PsadminResult) -> dict:
     }
 
 
-@app.command("list")
-def list_domains(
-    domain_type: Optional[str] = typer.Option(
-        None,
-        "--type",
-        "-t",
-        help="Filter by domain type (app, prcs, pia)",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        "-j",
-        help="Output as JSON",
-    ),
-) -> None:
-    """List all domains."""
-    config = get_config()
-    domains = run_discovery(config, domain_type)
-    domain_dicts = [d.to_dict() for d in domains]
-
-    # Strip config from table output
-    if not json_output:
-        for d in domain_dicts:
-            d.pop("config", None)
-
-    if json_output:
-        print_json(domain_dicts)
-    else:
-        if not domains:
-            console.print("[dim]No domains found[/dim]")
-            console.print(f"[dim]Searched: {config.get_ps_cfg_home()}[/dim]")
-        else:
-            print_domains_table(domain_dicts)
-
-
-@app.command("status")
-def status(
-    name: str = typer.Argument(..., help="Domain name"),
-    full: bool = typer.Option(
-        False,
-        "--full",
-        "-f",
-        help="Show full raw psadmin output",
-    ),
-    json_output: bool = typer.Option(
-        False,
-        "--json",
-        "-j",
-        help="Output as structured JSON",
-    ),
-    domain_type: Optional[str] = typer.Option(
-        None,
-        "--type",
-        "-t",
-        help="Domain type (app, prcs, pia) - auto-detected if not specified",
-    ),
-    report: bool = typer.Option(
-        False,
-        "--report",
-        "-r",
-        help="Report status to OPS API",
-    ),
-) -> None:
-    """
-    Show status of a domain.
-
-    Examples:
-        psa domain status APPDOM           # Short output (running/stopped)
-        psa domain status APPDOM --full    # Full psadmin output
-        psa domain status APPDOM --json    # Structured JSON
-        psa domain status APPDOM --report  # Report status to OPS
-    """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
-
-    executor = _get_executor()
-    result = _execute_domain_command(domain, "status", executor)
-
-    status_str = _parse_status_output(result.output, domain.domain_type)
-
-    if json_output:
-        console.print_json(json.dumps(_format_status_json(domain, result)))
-    elif full:
-        console.print(result.output)
-    else:
-        # Short output
-        if status_str == "running":
-            console.print(f"[green]{name}[/green]: [bold green]running[/bold green]")
-        elif status_str == "stopped":
-            console.print(f"[yellow]{name}[/yellow]: [bold yellow]stopped[/bold yellow]")
-        else:
-            console.print(f"[dim]{name}[/dim]: [dim]unknown[/dim]")
-
-    if report:
-        _report_status_to_api(name, status_str)
-
-
-@app.command("start")
-def start(
-    name: str = typer.Argument(..., help="Domain name"),
-    serial: bool = typer.Option(
-        False,
-        "--serial",
-        "-s",
-        help="Start processes serially (disable parallel boot)",
-    ),
-    domain_type: Optional[str] = typer.Option(
-        None,
-        "--type",
-        "-t",
-        help="Domain type (app, prcs, pia)",
-    ),
-) -> None:
-    """
-    Start a domain.
-
-    Examples:
-        psa domain start APPDOM
-        psa domain start PRCSDOM --serial
-    """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
-
-    # Temporarily disable parallel boot if serial requested
-    executor = _get_executor()
-    if serial:
-        executor.config.parallel_boot = False
-
-    print_info(f"Starting {domain.domain_type} domain: {name}")
-    result = _execute_domain_command(domain, "start", executor)
-
-    if result.success:
-        print_success(f"Domain {name} started")
-    else:
-        print_error(f"Failed to start domain: {result.output}")
-        raise typer.Exit(result.exit_code)
-
-
-@app.command("stop")
-def stop(
-    name: str = typer.Argument(..., help="Domain name"),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        "-f",
-        help="Force stop (kill processes)",
-    ),
-    domain_type: Optional[str] = typer.Option(
-        None,
-        "--type",
-        "-t",
-        help="Domain type (app, prcs, pia)",
-    ),
-) -> None:
-    """
-    Stop a domain.
-
-    Examples:
-        psa domain stop APPDOM
-        psa domain stop PRCSDOM --force
-    """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
-
-    executor = _get_executor()
-    action = "kill" if force else "stop"
-
-    print_info(f"Stopping {domain.domain_type} domain: {name}")
-    result = _execute_domain_command(domain, action, executor)
-
-    if result.success:
-        print_success(f"Domain {name} stopped")
-    else:
-        print_error(f"Failed to stop domain: {result.output}")
-        raise typer.Exit(result.exit_code)
-
-
-@app.command("restart")
-def restart(
-    name: str = typer.Argument(..., help="Domain name"),
-    serial: bool = typer.Option(
-        False,
-        "--serial",
-        "-s",
-        help="Start processes serially",
-    ),
-    domain_type: Optional[str] = typer.Option(
-        None,
-        "--type",
-        "-t",
-        help="Domain type (app, prcs, pia)",
-    ),
-) -> None:
-    """
-    Restart a domain (stop then start).
-
-    Examples:
-        psa domain restart APPDOM
-    """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
-
-    executor = _get_executor()
-    if serial:
-        executor.config.parallel_boot = False
-
-    print_info(f"Restarting {domain.domain_type} domain: {name}")
-
-    # Stop
-    result = _execute_domain_command(domain, "stop", executor)
-    if not result.success:
-        print_warning(f"Stop returned non-zero: {result.output}")
-
-    # Start
-    result = _execute_domain_command(domain, "start", executor)
-    if result.success:
-        print_success(f"Domain {name} restarted")
-    else:
-        print_error(f"Failed to start domain: {result.output}")
-        raise typer.Exit(result.exit_code)
-
-
-@app.command("kill")
-def kill(
-    name: str = typer.Argument(..., help="Domain name"),
-    domain_type: Optional[str] = typer.Option(
-        None,
-        "--type",
-        "-t",
-        help="Domain type (app, prcs, pia)",
-    ),
-) -> None:
-    """
-    Force stop a domain (kill processes).
-
-    Examples:
-        psa domain kill APPDOM
-    """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
-
-    executor = _get_executor()
-    print_info(f"Force stopping {domain.domain_type} domain: {name}")
-    result = _execute_domain_command(domain, "kill", executor)
-
-    if result.success:
-        print_success(f"Domain {name} killed")
-    else:
-        print_error(f"Failed to kill domain: {result.output}")
-        raise typer.Exit(result.exit_code)
-
-
-@app.command("configure")
-def configure(
-    name: str = typer.Argument(..., help="Domain name"),
-    domain_type: Optional[str] = typer.Option(
-        None,
-        "--type",
-        "-t",
-        help="Domain type (app, prcs, pia)",
-    ),
-) -> None:
-    """
-    Configure a domain.
-
-    Examples:
-        psa domain configure APPDOM
-    """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
-
-    if domain.domain_type == "pia":
-        print_error("Configure not supported for PIA domains")
-        raise typer.Exit(1)
-
-    executor = _get_executor()
-    print_info(f"Configuring {domain.domain_type} domain: {name}")
-    result = _execute_domain_command(domain, "configure", executor)
-
-    if result.success:
-        print_success(f"Domain {name} configured")
-    else:
-        print_error(f"Failed to configure domain: {result.output}")
-        raise typer.Exit(result.exit_code)
-
-
-@app.command("purge")
-def purge(
-    name: str = typer.Argument(..., help="Domain name"),
-    domain_type: Optional[str] = typer.Option(
-        None,
-        "--type",
-        "-t",
-        help="Domain type (app, prcs, pia)",
-    ),
-) -> None:
-    """
-    Clear domain cache.
-
-    Examples:
-        psa domain purge APPDOM
-    """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
-
-    executor = _get_executor()
-    print_info(f"Purging cache for {domain.domain_type} domain: {name}")
-    result = _execute_domain_command(domain, "purge", executor)
-
-    if result.success:
-        print_success(f"Domain {name} cache purged")
-    else:
-        print_error(f"Failed to purge cache: {result.output}")
-        raise typer.Exit(result.exit_code)
-
-
-@app.command("flush")
-def flush(
-    name: str = typer.Argument(..., help="Domain name"),
-    domain_type: Optional[str] = typer.Option(
-        None,
-        "--type",
-        "-t",
-        help="Domain type (app, prcs)",
-    ),
-) -> None:
-    """
-    Clear domain IPC resources.
-
-    Examples:
-        psa domain flush APPDOM
-    """
-    domain = _find_domain(name, domain_type)
-    if not domain:
-        print_error(f"Domain '{name}' not found")
-        raise typer.Exit(1)
-
-    if domain.domain_type == "pia":
-        print_warning("Flush not applicable for PIA domains")
-        return
-
-    executor = _get_executor()
-    print_info(f"Flushing IPC for {domain.domain_type} domain: {name}")
-    result = _execute_domain_command(domain, "flush", executor)
-
-    if result.success:
-        print_success(f"Domain {name} IPC flushed")
-    else:
-        print_error(f"Failed to flush IPC: {result.output}")
-        raise typer.Exit(result.exit_code)
-
-
 @app.command("bounce")
 def bounce(
     name: str = typer.Argument(..., help="Domain name"),
@@ -531,7 +165,7 @@ def bounce(
     ),
 ) -> None:
     """
-    Full domain bounce (stop, purge, flush, configure, start).
+    Full domain bounce.
 
     Examples:
         psa domain bounce APPDOM
@@ -576,27 +210,21 @@ def bounce(
         raise typer.Exit(result.exit_code)
 
 
-@app.command("reconfigure")
-def reconfigure(
+@app.command("configure")
+def configure(
     name: str = typer.Argument(..., help="Domain name"),
-    serial: bool = typer.Option(
-        False,
-        "--serial",
-        "-s",
-        help="Start processes serially",
-    ),
     domain_type: Optional[str] = typer.Option(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs)",
+        help="Domain type (app, prcs, pia)",
     ),
 ) -> None:
     """
-    Reconfigure domain (stop, configure, start).
+    Configure a domain.
 
     Examples:
-        psa domain reconfigure APPDOM
+        psa domain configure APPDOM
     """
     domain = _find_domain(name, domain_type)
     if not domain:
@@ -604,98 +232,28 @@ def reconfigure(
         raise typer.Exit(1)
 
     if domain.domain_type == "pia":
-        print_error("Reconfigure not supported for PIA domains")
+        print_error("Configure not supported for PIA domains")
         raise typer.Exit(1)
 
     executor = _get_executor()
-    if serial:
-        executor.config.parallel_boot = False
-
-    print_info(f"Reconfiguring {domain.domain_type} domain: {name}")
-
-    # Stop
-    console.print("  [dim]Stopping...[/dim]")
-    _execute_domain_command(domain, "stop", executor)
-
-    # Configure
-    console.print("  [dim]Configuring...[/dim]")
-    _execute_domain_command(domain, "configure", executor)
-
-    # Start
-    console.print("  [dim]Starting...[/dim]")
-    result = _execute_domain_command(domain, "start", executor)
+    print_info(f"Configuring {domain.domain_type} domain: {name}")
+    result = _execute_domain_command(domain, "configure", executor)
 
     if result.success:
-        print_success(f"Domain {name} reconfigured")
+        print_success(f"Domain {name} configured")
     else:
-        print_error(f"Failed to start domain: {result.output}")
+        print_error(f"Failed to configure domain: {result.output}")
         raise typer.Exit(result.exit_code)
 
 
-@app.command("set-env")
-def set_env(
-    domain_id: str = typer.Argument(..., help="Domain ID (from PSA-OPS)"),
-    environment_id: str = typer.Argument(..., help="Environment ID to assign"),
-    ops_url: Optional[str] = typer.Option(
-        None,
-        "--ops-url",
-        envvar="PSA_OPS_URL",
-        help="OPS API URL (or uses saved config from psa config setup)",
-    ),
-) -> None:
-    """
-    Assign an environment to a domain in PSA-OPS.
-
-    Examples:
-        psa domain set-env abc123 def456
-        psa domain set-env abc123 def456 --ops-url http://ops:8002
-    """
-    config = get_config()
-
-    effective_ops_url = ops_url
-    if not effective_ops_url:
-        if config.ops.is_configured():
-            effective_ops_url = config.ops.url
-        else:
-            print_error("OPS not configured. Run 'psa config setup' first or use --ops-url")
-            raise typer.Exit(1)
-
-    url = f"{effective_ops_url.rstrip('/')}/api/v1/domains/{domain_id}"
-    payload = {"environment_id": environment_id}
-
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="PUT",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read().decode("utf-8"))
-            print_success(f"Domain {result.get('name', domain_id)} assigned to environment")
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8") if e.fp else ""
-        try:
-            error_data = json.loads(error_body)
-            print_error(error_data.get("detail", str(e)))
-        except json.JSONDecodeError:
-            print_error(f"HTTP {e.code}: {error_body or str(e)}")
-        raise typer.Exit(1)
-    except urllib.error.URLError as e:
-        print_error(f"Connection failed: {e.reason}")
-        raise typer.Exit(1)
-
-
 def _resolve_api_domain_id(client: ApiClient, name: str) -> str:
-    """Resolve domain name to UUID via cache then OPS API."""
+    """Resolve domain name to UUID via cache then PSA-OPS API."""
     cached = get_cached_domain_id(name)
     if cached:
         return cached
     domain = client.resolve_domain(name)
     if not domain:
-        print_error(f"Domain '{name}' not found in OPS")
+        print_error(f"Domain '{name}' not found in PSA-OPS")
         raise typer.Exit(1)
     return domain["id"]
 
@@ -728,7 +286,7 @@ def drift(
     """
     config = get_config()
     if not config.ops.is_configured():
-        print_error("OPS not configured. Run 'psa config setup' first")
+        print_error("PSA-OPS not configured. Run 'psa config setup' first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
@@ -804,3 +362,445 @@ def drift(
             )
 
         console.print(table)
+
+
+@app.command("flush")
+def flush(
+    name: str = typer.Argument(..., help="Domain name"),
+    domain_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Domain type (app, prcs)",
+    ),
+) -> None:
+    """
+    Clear domain IPC resources.
+
+    Examples:
+        psa domain flush APPDOM
+    """
+    domain = _find_domain(name, domain_type)
+    if not domain:
+        print_error(f"Domain '{name}' not found")
+        raise typer.Exit(1)
+
+    if domain.domain_type == "pia":
+        print_warning("Flush not applicable for PIA domains")
+        return
+
+    executor = _get_executor()
+    print_info(f"Flushing IPC for {domain.domain_type} domain: {name}")
+    result = _execute_domain_command(domain, "flush", executor)
+
+    if result.success:
+        print_success(f"Domain {name} IPC flushed")
+    else:
+        print_error(f"Failed to flush IPC: {result.output}")
+        raise typer.Exit(result.exit_code)
+
+
+@app.command("kill")
+def kill(
+    name: str = typer.Argument(..., help="Domain name"),
+    domain_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Domain type (app, prcs, pia)",
+    ),
+) -> None:
+    """
+    Force stop a domain.
+
+    Examples:
+        psa domain kill APPDOM
+    """
+    domain = _find_domain(name, domain_type)
+    if not domain:
+        print_error(f"Domain '{name}' not found")
+        raise typer.Exit(1)
+
+    executor = _get_executor()
+    print_info(f"Force stopping {domain.domain_type} domain: {name}")
+    result = _execute_domain_command(domain, "kill", executor)
+
+    if result.success:
+        print_success(f"Domain {name} killed")
+    else:
+        print_error(f"Failed to kill domain: {result.output}")
+        raise typer.Exit(result.exit_code)
+
+
+@app.command("list")
+def list_domains(
+    domain_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Filter by domain type (app, prcs, pia)",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output as JSON",
+    ),
+) -> None:
+    """List all domains."""
+    config = get_config()
+    domains = run_discovery(config, domain_type)
+    domain_dicts = [d.to_dict() for d in domains]
+
+    # Strip config from table output
+    if not json_output:
+        for d in domain_dicts:
+            d.pop("config", None)
+
+    if json_output:
+        print_json(domain_dicts)
+    else:
+        if not domains:
+            console.print("[dim]No domains found[/dim]")
+            console.print(f"[dim]Searched: {config.get_ps_cfg_home()}[/dim]")
+        else:
+            print_domains_table(domain_dicts)
+
+
+@app.command("purge")
+def purge(
+    name: str = typer.Argument(..., help="Domain name"),
+    domain_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Domain type (app, prcs, pia)",
+    ),
+) -> None:
+    """
+    Clear domain cache.
+
+    Examples:
+        psa domain purge APPDOM
+    """
+    domain = _find_domain(name, domain_type)
+    if not domain:
+        print_error(f"Domain '{name}' not found")
+        raise typer.Exit(1)
+
+    executor = _get_executor()
+    print_info(f"Purging cache for {domain.domain_type} domain: {name}")
+    result = _execute_domain_command(domain, "purge", executor)
+
+    if result.success:
+        print_success(f"Domain {name} cache purged")
+    else:
+        print_error(f"Failed to purge cache: {result.output}")
+        raise typer.Exit(result.exit_code)
+
+
+@app.command("reconfigure")
+def reconfigure(
+    name: str = typer.Argument(..., help="Domain name"),
+    serial: bool = typer.Option(
+        False,
+        "--serial",
+        "-s",
+        help="Start processes serially",
+    ),
+    domain_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Domain type (app, prcs)",
+    ),
+) -> None:
+    """
+    Reconfigure a domain.
+
+    Examples:
+        psa domain reconfigure APPDOM
+    """
+    domain = _find_domain(name, domain_type)
+    if not domain:
+        print_error(f"Domain '{name}' not found")
+        raise typer.Exit(1)
+
+    if domain.domain_type == "pia":
+        print_error("Reconfigure not supported for PIA domains")
+        raise typer.Exit(1)
+
+    executor = _get_executor()
+    if serial:
+        executor.config.parallel_boot = False
+
+    print_info(f"Reconfiguring {domain.domain_type} domain: {name}")
+
+    # Stop
+    console.print("  [dim]Stopping...[/dim]")
+    _execute_domain_command(domain, "stop", executor)
+
+    # Configure
+    console.print("  [dim]Configuring...[/dim]")
+    _execute_domain_command(domain, "configure", executor)
+
+    # Start
+    console.print("  [dim]Starting...[/dim]")
+    result = _execute_domain_command(domain, "start", executor)
+
+    if result.success:
+        print_success(f"Domain {name} reconfigured")
+    else:
+        print_error(f"Failed to start domain: {result.output}")
+        raise typer.Exit(result.exit_code)
+
+
+@app.command("restart")
+def restart(
+    name: str = typer.Argument(..., help="Domain name"),
+    serial: bool = typer.Option(
+        False,
+        "--serial",
+        "-s",
+        help="Start processes serially",
+    ),
+    domain_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Domain type (app, prcs, pia)",
+    ),
+) -> None:
+    """
+    Restart a domain.
+
+    Examples:
+        psa domain restart APPDOM
+    """
+    domain = _find_domain(name, domain_type)
+    if not domain:
+        print_error(f"Domain '{name}' not found")
+        raise typer.Exit(1)
+
+    executor = _get_executor()
+    if serial:
+        executor.config.parallel_boot = False
+
+    print_info(f"Restarting {domain.domain_type} domain: {name}")
+
+    # Stop
+    result = _execute_domain_command(domain, "stop", executor)
+    if not result.success:
+        print_warning(f"Stop returned non-zero: {result.output}")
+
+    # Start
+    result = _execute_domain_command(domain, "start", executor)
+    if result.success:
+        print_success(f"Domain {name} restarted")
+    else:
+        print_error(f"Failed to start domain: {result.output}")
+        raise typer.Exit(result.exit_code)
+
+
+@app.command("set-env")
+def set_env(
+    domain_id: str = typer.Argument(..., help="Domain ID (from PSA-OPS)"),
+    environment_id: str = typer.Argument(..., help="Environment ID to assign"),
+    ops_url: Optional[str] = typer.Option(
+        None,
+        "--ops-url",
+        envvar="PSA_OPS_URL",
+        help="PSA-OPS URL (or uses saved config from psa config setup)",
+    ),
+) -> None:
+    """
+    Assign an environment to a domain in PSA-OPS.
+
+    Examples:
+        psa domain set-env abc123 def456
+        psa domain set-env abc123 def456 --ops-url http://ops:8002
+    """
+    config = get_config()
+
+    effective_ops_url = ops_url
+    if not effective_ops_url:
+        if config.ops.is_configured():
+            effective_ops_url = config.ops.url
+        else:
+            print_error("PSA-OPS not configured. Run 'psa config setup' first or use --ops-url")
+            raise typer.Exit(1)
+
+    url = f"{effective_ops_url.rstrip('/')}/api/v1/domains/{domain_id}"
+    payload = {"environment_id": environment_id}
+
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="PUT",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            print_success(f"Domain {result.get('name', domain_id)} assigned to environment")
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode("utf-8") if e.fp else ""
+        try:
+            error_data = json.loads(error_body)
+            print_error(error_data.get("detail", str(e)))
+        except json.JSONDecodeError:
+            print_error(f"HTTP {e.code}: {error_body or str(e)}")
+        raise typer.Exit(1)
+    except urllib.error.URLError as e:
+        print_error(f"Connection failed: {e.reason}")
+        raise typer.Exit(1)
+
+
+@app.command("start")
+def start(
+    name: str = typer.Argument(..., help="Domain name"),
+    serial: bool = typer.Option(
+        False,
+        "--serial",
+        "-s",
+        help="Start processes serially (disable parallel boot)",
+    ),
+    domain_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Domain type (app, prcs, pia)",
+    ),
+) -> None:
+    """
+    Start a domain.
+
+    Examples:
+        psa domain start APPDOM
+        psa domain start PRCSDOM --serial
+    """
+    domain = _find_domain(name, domain_type)
+    if not domain:
+        print_error(f"Domain '{name}' not found")
+        raise typer.Exit(1)
+
+    # Temporarily disable parallel boot if serial requested
+    executor = _get_executor()
+    if serial:
+        executor.config.parallel_boot = False
+
+    print_info(f"Starting {domain.domain_type} domain: {name}")
+    result = _execute_domain_command(domain, "start", executor)
+
+    if result.success:
+        print_success(f"Domain {name} started")
+    else:
+        print_error(f"Failed to start domain: {result.output}")
+        raise typer.Exit(result.exit_code)
+
+
+@app.command("status")
+def status(
+    name: str = typer.Argument(..., help="Domain name"),
+    full: bool = typer.Option(
+        False,
+        "--full",
+        "-f",
+        help="Show full raw psadmin output",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output as structured JSON",
+    ),
+    domain_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Domain type (app, prcs, pia) - auto-detected if not specified",
+    ),
+    report: bool = typer.Option(
+        False,
+        "--report",
+        "-r",
+        help="Report status to PSA-OPS",
+    ),
+) -> None:
+    """
+    Show status of a domain.
+
+    Examples:
+        psa domain status APPDOM           # Short output (running/stopped)
+        psa domain status APPDOM --full    # Full psadmin output
+        psa domain status APPDOM --json    # Structured JSON
+        psa domain status APPDOM --report  # Report status to PSA-OPS
+    """
+    domain = _find_domain(name, domain_type)
+    if not domain:
+        print_error(f"Domain '{name}' not found")
+        raise typer.Exit(1)
+
+    executor = _get_executor()
+    result = _execute_domain_command(domain, "status", executor)
+
+    status_str = _parse_status_output(result.output, domain.domain_type)
+
+    if json_output:
+        console.print_json(json.dumps(_format_status_json(domain, result)))
+    elif full:
+        console.print(result.output)
+    else:
+        # Short output
+        if status_str == "running":
+            console.print(f"[green]{name}[/green]: [bold green]running[/bold green]")
+        elif status_str == "stopped":
+            console.print(f"[yellow]{name}[/yellow]: [bold yellow]stopped[/bold yellow]")
+        else:
+            console.print(f"[dim]{name}[/dim]: [dim]unknown[/dim]")
+
+    if report:
+        _report_status_to_api(name, status_str)
+
+
+@app.command("stop")
+def stop(
+    name: str = typer.Argument(..., help="Domain name"),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Force stop (kill processes)",
+    ),
+    domain_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Domain type (app, prcs, pia)",
+    ),
+) -> None:
+    """
+    Stop a domain.
+
+    Examples:
+        psa domain stop APPDOM
+        psa domain stop PRCSDOM --force
+    """
+    domain = _find_domain(name, domain_type)
+    if not domain:
+        print_error(f"Domain '{name}' not found")
+        raise typer.Exit(1)
+
+    executor = _get_executor()
+    action = "kill" if force else "stop"
+
+    print_info(f"Stopping {domain.domain_type} domain: {name}")
+    result = _execute_domain_command(domain, action, executor)
+
+    if result.success:
+        print_success(f"Domain {name} stopped")
+    else:
+        print_error(f"Failed to stop domain: {result.output}")
+        raise typer.Exit(result.exit_code)
