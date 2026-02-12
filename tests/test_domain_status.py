@@ -53,6 +53,9 @@ class TestParseStatusOutput:
     def test_prcs_is_not_started(self):
         assert _parse_status_output("PRCSDOM is not started", "prcs") == "stopped"
 
+    def test_prcs_started(self):
+        assert _parse_status_output("Started", "prcs") == "running"
+
     def test_prcs_tmadmin_table_running(self):
         output = (
             "> Prog Name      Queue Name  Grp Name      ID\n"
