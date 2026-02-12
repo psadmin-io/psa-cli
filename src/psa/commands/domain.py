@@ -120,17 +120,22 @@ def _parse_status_output(output: str, domain_type: str) -> str:
     """Parse psadmin status output to determine running/stopped status."""
     output_lower = output.lower()
 
-    if domain_type == "app":
-        # Check for running indicators
+    if domain_type in ("app", "prcs"):
+        # Stopped patterns (check first — "is not started" is unambiguous)
+        if "not booted" in output_lower or "is not started" in output_lower:
+            return "stopped"
+        if domain_type == "app" and "no processes" in output_lower:
+            return "stopped"
+        if domain_type == "prcs" and ("not running" in output_lower or "no process" in output_lower):
+            return "stopped"
+        # Running patterns
         if "processes running" in output_lower or "server status: active" in output_lower:
             return "running"
-        if "not booted" in output_lower or "no processes" in output_lower or "is not started" in output_lower:
-            return "stopped"
-    elif domain_type == "prcs":
-        if "process scheduler is running" in output_lower:
+        if domain_type == "prcs" and "process scheduler is running" in output_lower:
             return "running"
-        if "not running" in output_lower or "no process" in output_lower or "is not started" in output_lower:
-            return "stopped"
+        # tmadmin process table — BBL present means Tuxedo domain is booted
+        if "bbl" in output_lower and "prog name" in output_lower:
+            return "running"
     elif domain_type == "pia":
         if "running" in output_lower and "not running" not in output_lower:
             return "running"

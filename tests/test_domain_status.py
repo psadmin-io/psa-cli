@@ -26,6 +26,16 @@ class TestParseStatusOutput:
     def test_app_is_not_started(self):
         assert _parse_status_output("APPDOM is not started", "app") == "stopped"
 
+    def test_app_tmadmin_table_running(self):
+        """tmadmin process table with BBL means domain is booted."""
+        output = (
+            "> Prog Name      Queue Name  Grp Name      ID\n"
+            "---------      ----------  --------      --\n"
+            "BBL            200048      vmhost         0\n"
+            "PSAPPSRV       APPQ        APPSRV         1\n"
+        )
+        assert _parse_status_output(output, "app") == "running"
+
     def test_app_unknown(self):
         assert _parse_status_output("something unexpected", "app") == "unknown"
 
@@ -42,6 +52,15 @@ class TestParseStatusOutput:
 
     def test_prcs_is_not_started(self):
         assert _parse_status_output("PRCSDOM is not started", "prcs") == "stopped"
+
+    def test_prcs_tmadmin_table_running(self):
+        output = (
+            "> Prog Name      Queue Name  Grp Name      ID\n"
+            "---------      ----------  --------      --\n"
+            "BBL            200048      vmhost         0\n"
+            "PSPRCSRV       SCHEDQ      PRCS           1\n"
+        )
+        assert _parse_status_output(output, "prcs") == "running"
 
     def test_prcs_unknown(self):
         assert _parse_status_output("unexpected output", "prcs") == "unknown"
