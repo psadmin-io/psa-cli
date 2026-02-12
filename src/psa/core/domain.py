@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from psa.core.config import PsaConfig, get_config
+from psa.core.fileops import SudoFileOps
 
 
 MAX_CONFIG_FILE_SIZE = 100 * 1024  # 100KB limit for raw config capture
@@ -43,24 +44,24 @@ class DomainDiscovery:
 
     def __init__(self, config: Optional[PsaConfig] = None):
         self.config = config or get_config()
+        self.fileops = SudoFileOps(self.config)
 
     def _read_config_file(self, config_file: Path) -> Optional[dict[str, Any]]:
         """Read raw config file content if within size limit.
 
         Returns dict with type, path, content or None if file too large/unreadable.
         """
-        try:
-            size = config_file.stat().st_size
-            if size > MAX_CONFIG_FILE_SIZE:
-                return None
-            content = config_file.read_text(encoding="utf-8", errors="replace")
-            return {
-                "type": config_file.name,
-                "path": str(config_file),
-                "content": content,
-            }
-        except Exception:
+        size = self.fileops.stat_size(config_file)
+        if size is None or size > MAX_CONFIG_FILE_SIZE:
             return None
+        content = self.fileops.read_text(config_file)
+        if content is None:
+            return None
+        return {
+            "type": config_file.name,
+            "path": str(config_file),
+            "content": content,
+        }
 
     def discover_all(self, ps_cfg_home: Optional[Path] = None) -> list[DomainInfo]:
         """Discover all domain types in a single PS_CFG_HOME."""
@@ -115,39 +116,34 @@ class DomainDiscovery:
         cfg_home = ps_cfg_home or self.config.get_ps_cfg_home()
         appserv_path = cfg_home / "appserv"
 
-        try:
-            if not appserv_path.exists():
-                return domains
-        except PermissionError:
+        if not self.fileops.exists(appserv_path):
             return domains
 
-        for domain_dir in appserv_path.iterdir():
-            try:
-                if not domain_dir.is_dir():
-                    continue
-
-                # Skip special directories
-                if domain_dir.name in ("prcs", "search", "piaconfig"):
-                    continue
-
-                # Check for psappsrv.cfg to confirm it's an appserver domain
-                config_file = domain_dir / "psappsrv.cfg"
-                if config_file.exists():
-                    domain = DomainInfo(
-                        name=domain_dir.name,
-                        domain_type="app",
-                        path=domain_dir,
-                        ps_cfg_home=cfg_home,
-                    )
-                    domain.config = self._parse_appserver_config(config_file)
-                    domain.status = self._check_appserver_status(domain_dir)
-                    # Capture raw config file content
-                    raw_config = self._read_config_file(config_file)
-                    if raw_config:
-                        domain.config_files.append(raw_config)
-                    domains.append(domain)
-            except PermissionError:
+        for name, is_dir in self.fileops.listdir(appserv_path):
+            if not is_dir:
                 continue
+
+            # Skip special directories
+            if name in ("prcs", "search", "piaconfig"):
+                continue
+
+            domain_dir = appserv_path / name
+
+            # Check for psappsrv.cfg to confirm it's an appserver domain
+            config_file = domain_dir / "psappsrv.cfg"
+            if self.fileops.exists(config_file):
+                domain = DomainInfo(
+                    name=name,
+                    domain_type="app",
+                    path=domain_dir,
+                    ps_cfg_home=cfg_home,
+                )
+                domain.config = self._parse_appserver_config(config_file)
+                domain.status = self._check_appserver_status(domain_dir)
+                raw_config = self._read_config_file(config_file)
+                if raw_config:
+                    domain.config_files.append(raw_config)
+                domains.append(domain)
 
         return domains
 
@@ -157,35 +153,30 @@ class DomainDiscovery:
         cfg_home = ps_cfg_home or self.config.get_ps_cfg_home()
         prcs_path = cfg_home / "appserv" / "prcs"
 
-        try:
-            if not prcs_path.exists():
-                return domains
-        except PermissionError:
+        if not self.fileops.exists(prcs_path):
             return domains
 
-        for domain_dir in prcs_path.iterdir():
-            try:
-                if not domain_dir.is_dir():
-                    continue
-
-                # Check for psprcs.cfg to confirm it's a prcs domain
-                config_file = domain_dir / "psprcs.cfg"
-                if config_file.exists():
-                    domain = DomainInfo(
-                        name=domain_dir.name,
-                        domain_type="prcs",
-                        path=domain_dir,
-                        ps_cfg_home=cfg_home,
-                    )
-                    domain.config = self._parse_prcs_config(config_file)
-                    domain.status = self._check_prcs_status(domain_dir)
-                    # Capture raw config file content
-                    raw_config = self._read_config_file(config_file)
-                    if raw_config:
-                        domain.config_files.append(raw_config)
-                    domains.append(domain)
-            except PermissionError:
+        for name, is_dir in self.fileops.listdir(prcs_path):
+            if not is_dir:
                 continue
+
+            domain_dir = prcs_path / name
+
+            # Check for psprcs.cfg to confirm it's a prcs domain
+            config_file = domain_dir / "psprcs.cfg"
+            if self.fileops.exists(config_file):
+                domain = DomainInfo(
+                    name=name,
+                    domain_type="prcs",
+                    path=domain_dir,
+                    ps_cfg_home=cfg_home,
+                )
+                domain.config = self._parse_prcs_config(config_file)
+                domain.status = self._check_prcs_status(domain_dir)
+                raw_config = self._read_config_file(config_file)
+                if raw_config:
+                    domain.config_files.append(raw_config)
+                domains.append(domain)
 
         return domains
 
@@ -195,60 +186,55 @@ class DomainDiscovery:
         cfg_home = ps_cfg_home or self.config.get_ps_cfg_home()
         webserv_path = cfg_home / "webserv"
 
-        try:
-            if not webserv_path.exists():
-                return domains
-        except PermissionError:
+        if not self.fileops.exists(webserv_path):
             return domains
 
-        for domain_dir in webserv_path.iterdir():
-            try:
-                if not domain_dir.is_dir():
-                    continue
-
-                # Check for configuration.properties or config.xml
-                config_props = domain_dir / "applications" / "peoplesoft" / "configuration.properties"
-                config_xml = domain_dir / "config" / "config.xml"
-
-                if config_props.exists() or config_xml.exists():
-                    domain = DomainInfo(
-                        name=domain_dir.name,
-                        domain_type="pia",
-                        path=domain_dir,
-                        ps_cfg_home=cfg_home,
-                    )
-                    if config_props.exists():
-                        domain.config = self._parse_pia_config(config_props)
-                        # Capture raw config file content
-                        raw_config = self._read_config_file(config_props)
-                        if raw_config:
-                            domain.config_files.append(raw_config)
-                    domain.status = self._check_pia_status(domain_dir)
-                    domains.append(domain)
-            except PermissionError:
+        for name, is_dir in self.fileops.listdir(webserv_path):
+            if not is_dir:
                 continue
+
+            domain_dir = webserv_path / name
+
+            # Check for configuration.properties or config.xml
+            config_props = domain_dir / "applications" / "peoplesoft" / "configuration.properties"
+            config_xml = domain_dir / "config" / "config.xml"
+
+            if self.fileops.exists(config_props) or self.fileops.exists(config_xml):
+                domain = DomainInfo(
+                    name=name,
+                    domain_type="pia",
+                    path=domain_dir,
+                    ps_cfg_home=cfg_home,
+                )
+                if self.fileops.exists(config_props):
+                    domain.config = self._parse_pia_config(config_props)
+                    raw_config = self._read_config_file(config_props)
+                    if raw_config:
+                        domain.config_files.append(raw_config)
+                domain.status = self._check_pia_status(domain_dir)
+                domains.append(domain)
 
         return domains
 
     def _parse_appserver_config(self, config_file: Path) -> dict[str, Any]:
         """Parse psappsrv.cfg configuration file."""
         config = {}
+        content = self.fileops.read_text(config_file)
+        if not content:
+            return config
         try:
             parser = configparser.ConfigParser()
-            parser.read(config_file)
+            parser.read_string(content)
 
-            # Extract key settings from Startup section
             if parser.has_section("Startup"):
                 startup = dict(parser.items("Startup"))
                 config["db_name"] = startup.get("dbname", "")
                 config["db_type"] = startup.get("dbtype", "")
 
-            # Extract from Domain Settings
             if parser.has_section("Domain Settings"):
                 domain_settings = dict(parser.items("Domain Settings"))
                 config["domain_id"] = domain_settings.get("domain id", "")
 
-            # Extract JOLT listener info
             if parser.has_section("JOLT Listener"):
                 jolt = dict(parser.items("JOLT Listener"))
                 config["jolt_port"] = jolt.get("port", "")
@@ -262,9 +248,12 @@ class DomainDiscovery:
     def _parse_prcs_config(self, config_file: Path) -> dict[str, Any]:
         """Parse psprcs.cfg configuration file."""
         config = {}
+        content = self.fileops.read_text(config_file)
+        if not content:
+            return config
         try:
             parser = configparser.ConfigParser()
-            parser.read(config_file)
+            parser.read_string(content)
 
             if parser.has_section("Startup"):
                 startup = dict(parser.items("Startup"))
@@ -280,23 +269,23 @@ class DomainDiscovery:
     def _parse_pia_config(self, config_file: Path) -> dict[str, Any]:
         """Parse PIA configuration.properties file."""
         config = {}
+        content = self.fileops.read_text(config_file)
+        if not content:
+            return config
         try:
-            # configuration.properties is a Java properties file
-            with open(config_file) as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        key, value = line.split("=", 1)
-                        key = key.strip()
-                        value = value.strip()
+            for line in content.splitlines():
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    value = value.strip()
 
-                        # Extract key properties
-                        if key == "psserver":
-                            config["app_server"] = value
-                        elif key == "psport":
-                            config["jolt_port"] = value
-                        elif key == "webprofile":
-                            config["web_profile"] = value
+                    if key == "psserver":
+                        config["app_server"] = value
+                    elif key == "psport":
+                        config["jolt_port"] = value
+                    elif key == "webprofile":
+                        config["web_profile"] = value
 
         except Exception:
             pass

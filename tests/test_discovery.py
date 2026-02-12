@@ -165,19 +165,19 @@ class TestEmptyCfgHome:
     """Test discovery with empty PS_CFG_HOME."""
 
     def test_no_domains_returns_empty(self, tmp_path):
-        config = PsaConfig(ps_cfg_home=tmp_path, ops=OpsConfig())
+        config = PsaConfig(ps_cfg_home=tmp_path, ops=OpsConfig(), sudo_enabled=False)
         discovery = DomainDiscovery(config)
         assert discovery.discover_all() == []
 
     def test_empty_appserv(self, tmp_path):
         (tmp_path / "appserv").mkdir()
-        config = PsaConfig(ps_cfg_home=tmp_path, ops=OpsConfig())
+        config = PsaConfig(ps_cfg_home=tmp_path, ops=OpsConfig(), sudo_enabled=False)
         discovery = DomainDiscovery(config)
         assert discovery.discover_appserver_domains() == []
 
     def test_empty_webserv(self, tmp_path):
         (tmp_path / "webserv").mkdir()
-        config = PsaConfig(ps_cfg_home=tmp_path, ops=OpsConfig())
+        config = PsaConfig(ps_cfg_home=tmp_path, ops=OpsConfig(), sudo_enabled=False)
         discovery = DomainDiscovery(config)
         assert discovery.discover_pia_domains() == []
 

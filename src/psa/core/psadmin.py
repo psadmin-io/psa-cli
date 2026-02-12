@@ -200,29 +200,27 @@ class PsadminExecutor:
 
     def prcs_purge(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
         """Purge process scheduler domain cache."""
-        # PRCS cache is cleared manually
         cache_path = ps_cfg_home or self.config.get_ps_cfg_home()
         cache_dir = cache_path / "appserv" / "prcs" / domain / "CACHE"
+        shell_cmd = f"find {cache_dir} -mindepth 1 -delete"
         try:
-            if cache_dir.exists():
-                import shutil
-                for item in cache_dir.iterdir():
-                    if item.is_dir():
-                        shutil.rmtree(item)
-                    else:
-                        item.unlink()
+            if self._is_runtime_user() or not self.config.sudo_enabled:
+                cmd = ["sh", "-c", shell_cmd]
+            else:
+                cmd = ["sudo", "su", "-", self.config.runtime_user, "-c", shell_cmd]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             return PsadminResult(
-                success=True,
-                exit_code=0,
-                output=f"Purged cache: {cache_dir}",
-                command=f"rm -rf {cache_dir}/*",
+                success=result.returncode == 0,
+                exit_code=result.returncode,
+                output=result.stdout + result.stderr or f"Purged cache: {cache_dir}",
+                command=" ".join(cmd),
             )
         except Exception as e:
             return PsadminResult(
                 success=False,
                 exit_code=1,
                 output=str(e),
-                command=f"rm -rf {cache_dir}/*",
+                command=shell_cmd,
             )
 
     # Web server domain commands
@@ -273,29 +271,39 @@ class PsadminExecutor:
         """Purge web server domain cache."""
         cfg_home = ps_cfg_home or self.config.get_ps_cfg_home()
         cache_pattern = cfg_home / "webserv" / domain / "applications" / "peoplesoft" / "PORTAL*" / "*" / "cache*"
+        shell_cmd = f"rm -rf {cache_pattern}"
         try:
-            import glob
-            import shutil
-            cache_dirs = glob.glob(str(cache_pattern))
-            for cache_dir in cache_dirs:
-                shutil.rmtree(cache_dir, ignore_errors=True)
+            if self._is_runtime_user() or not self.config.sudo_enabled:
+                cmd = ["sh", "-c", shell_cmd]
+            else:
+                cmd = ["sudo", "su", "-", self.config.runtime_user, "-c", shell_cmd]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             return PsadminResult(
-                success=True,
-                exit_code=0,
-                output=f"Purged {len(cache_dirs)} cache directories",
-                command=f"rm -rf {cache_pattern}",
+                success=result.returncode == 0,
+                exit_code=result.returncode,
+                output=result.stdout + result.stderr or f"Purged cache: {cache_pattern}",
+                command=" ".join(cmd),
             )
         except Exception as e:
             return PsadminResult(
                 success=False,
                 exit_code=1,
                 output=str(e),
-                command=f"rm -rf {cache_pattern}",
+                command=shell_cmd,
             )
 
     def _run_web_script(self, script: Path, domain: str) -> PsadminResult:
         """Run a web server script (startPIA.sh or stopPIA.sh)."""
-        if not script.exists():
+        # Check existence via sudo when needed (webserv/ may be 750)
+        if not self._is_runtime_user() and self.config.sudo_enabled:
+            check = subprocess.run(
+                ["sudo", "su", "-", self.config.runtime_user, "-c", f"test -e {script}"],
+                capture_output=True, timeout=10,
+            )
+            script_exists = check.returncode == 0
+        else:
+            script_exists = script.exists()
+        if not script_exists:
             return PsadminResult(
                 success=False,
                 exit_code=1,

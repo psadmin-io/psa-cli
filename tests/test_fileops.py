@@ -1,0 +1,185 @@
+"""Tests for SudoFileOps."""
+
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+import pytest
+import subprocess
+
+from psa.core.config import OpsConfig, PsaConfig
+from psa.core.fileops import SudoFileOps
+
+
+@pytest.fixture
+def direct_config(tmp_path):
+    """Config with sudo disabled — all ops go through pathlib."""
+    return PsaConfig(ps_cfg_home=tmp_path, ops=OpsConfig(), sudo_enabled=False)
+
+
+@pytest.fixture
+def sudo_config(tmp_path):
+    """Config with sudo enabled and USER != runtime_user."""
+    return PsaConfig(
+        ps_cfg_home=tmp_path,
+        ops=OpsConfig(),
+        sudo_enabled=True,
+        runtime_user="psadm2",
+    )
+
+
+class TestNeedsSudo:
+    def test_false_when_disabled(self, direct_config):
+        ops = SudoFileOps(direct_config)
+        assert ops._needs_sudo() is False
+
+    def test_false_when_user_matches(self, sudo_config):
+        ops = SudoFileOps(sudo_config)
+        with patch.dict("os.environ", {"USER": "psadm2"}):
+            assert ops._needs_sudo() is False
+
+    def test_true_when_user_differs(self, sudo_config):
+        ops = SudoFileOps(sudo_config)
+        with patch.dict("os.environ", {"USER": "opc"}):
+            assert ops._needs_sudo() is True
+
+
+class TestDirectMode:
+    """All ops work via pathlib when sudo_enabled=False."""
+
+    def test_exists_true(self, direct_config, tmp_path):
+        (tmp_path / "file.txt").write_text("hi")
+        ops = SudoFileOps(direct_config)
+        assert ops.exists(tmp_path / "file.txt") is True
+
+    def test_exists_false(self, direct_config, tmp_path):
+        ops = SudoFileOps(direct_config)
+        assert ops.exists(tmp_path / "nope") is False
+
+    def test_listdir(self, direct_config, tmp_path):
+        (tmp_path / "subdir").mkdir()
+        (tmp_path / "file.txt").write_text("data")
+        ops = SudoFileOps(direct_config)
+        entries = ops.listdir(tmp_path)
+        names = {name for name, _ in entries}
+        assert "subdir" in names
+        assert "file.txt" in names
+        # Check is_dir flag
+        entry_map = dict(entries)
+        assert entry_map["subdir"] is True
+        assert entry_map["file.txt"] is False
+
+    def test_listdir_empty(self, direct_config, tmp_path):
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        ops = SudoFileOps(direct_config)
+        assert ops.listdir(empty) == []
+
+    def test_listdir_nonexistent(self, direct_config, tmp_path):
+        ops = SudoFileOps(direct_config)
+        assert ops.listdir(tmp_path / "nope") == []
+
+    def test_read_text(self, direct_config, tmp_path):
+        f = tmp_path / "test.cfg"
+        f.write_text("hello world")
+        ops = SudoFileOps(direct_config)
+        assert ops.read_text(f) == "hello world"
+
+    def test_read_text_missing(self, direct_config, tmp_path):
+        ops = SudoFileOps(direct_config)
+        assert ops.read_text(tmp_path / "nope") is None
+
+    def test_stat_size(self, direct_config, tmp_path):
+        f = tmp_path / "test.cfg"
+        f.write_text("12345")
+        ops = SudoFileOps(direct_config)
+        assert ops.stat_size(f) == 5
+
+    def test_stat_size_missing(self, direct_config, tmp_path):
+        ops = SudoFileOps(direct_config)
+        assert ops.stat_size(tmp_path / "nope") is None
+
+
+class TestSudoMode:
+    """Verify correct sudo commands are built (mocked subprocess)."""
+
+    def _make_ops(self, sudo_config):
+        ops = SudoFileOps(sudo_config)
+        return ops
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_exists_calls_test_e(self, mock_run, sudo_config):
+        mock_run.return_value = MagicMock(returncode=0)
+        ops = self._make_ops(sudo_config)
+        result = ops.exists(Path("/u01/cfg/webserv"))
+        assert result is True
+        call_args = mock_run.call_args
+        cmd = call_args[0][0]
+        assert cmd == ["sudo", "su", "-", "psadm2", "-c", "test -e /u01/cfg/webserv"]
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_exists_false_on_nonzero(self, mock_run, sudo_config):
+        mock_run.return_value = MagicMock(returncode=1)
+        ops = self._make_ops(sudo_config)
+        assert ops.exists(Path("/nope")) is False
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_listdir_parses_ls(self, mock_run, sudo_config):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="APPDOM/\nPRCS/\nsome_file\n./\n../\n",
+        )
+        ops = self._make_ops(sudo_config)
+        entries = ops.listdir(Path("/u01/cfg/appserv"))
+        assert ("APPDOM", True) in entries
+        assert ("PRCS", True) in entries
+        assert ("some_file", False) in entries
+        # ./ and ../ should be filtered out
+        names = [name for name, _ in entries]
+        assert "." not in names
+        assert ".." not in names
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_listdir_calls_ls(self, mock_run, sudo_config):
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        ops = self._make_ops(sudo_config)
+        ops.listdir(Path("/u01/cfg/appserv"))
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["sudo", "su", "-", "psadm2", "-c", "ls -1ap /u01/cfg/appserv"]
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_read_text_calls_cat(self, mock_run, sudo_config):
+        mock_run.return_value = MagicMock(returncode=0, stdout="file content")
+        ops = self._make_ops(sudo_config)
+        result = ops.read_text(Path("/u01/cfg/psappsrv.cfg"))
+        assert result == "file content"
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["sudo", "su", "-", "psadm2", "-c", "cat /u01/cfg/psappsrv.cfg"]
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_read_text_none_on_failure(self, mock_run, sudo_config):
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        ops = self._make_ops(sudo_config)
+        assert ops.read_text(Path("/nope")) is None
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_stat_size_calls_stat(self, mock_run, sudo_config):
+        mock_run.return_value = MagicMock(returncode=0, stdout="4096\n")
+        ops = self._make_ops(sudo_config)
+        result = ops.stat_size(Path("/u01/cfg/psappsrv.cfg"))
+        assert result == 4096
+        cmd = mock_run.call_args[0][0]
+        assert cmd == ["sudo", "su", "-", "psadm2", "-c", "stat -c %s /u01/cfg/psappsrv.cfg"]
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_stat_size_none_on_failure(self, mock_run, sudo_config):
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        ops = self._make_ops(sudo_config)
+        assert ops.stat_size(Path("/nope")) is None
