@@ -14,6 +14,116 @@ app = typer.Typer(
 )
 
 
+@app.command("get")
+def get(
+    level: str = typer.Argument(..., help="Level: tier or environment"),
+    key: str = typer.Argument(..., help="Tier name or environment name"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file (or stdout)"),
+):
+    """
+    Get single YAML from PSA-OPS.
+
+    Examples:
+        psa dpk data get tier DEV
+        psa dpk data get environment HRPRD --output HRPRD.yaml
+    """
+
+    if level not in ['tier', 'environment']:
+        print_error(f"Invalid level: {level} (must be 'tier' or 'environment')")
+        raise typer.Exit(1)
+
+    # Get config and connect to PSA-OPS
+    config = get_config()
+    if not config.ops.is_configured():
+        print_error("PSA-OPS not configured. Run 'psa config setup' first")
+        raise typer.Exit(1)
+
+    client = ApiClient(config.ops.url)
+
+    try:
+        if level == 'tier':
+            yaml_content = client.get_tier_yaml(key)
+        else:
+            yaml_content = client.get_environment_yaml(key)
+    except Exception as e:
+        print_error(f"Get failed: {e}")
+        raise typer.Exit(1)
+
+    if output:
+        try:
+            output.write_text(yaml_content)
+            print_success(f"Written: {output}")
+        except Exception as e:
+            print_error(f"Failed to write {output}: {e}")
+            raise typer.Exit(1)
+    else:
+        print(yaml_content)
+
+
+@app.command("import")
+def import_data(
+    level: str = typer.Argument(..., help="Level: tier or environment"),
+    key: str = typer.Argument(..., help="Tier name or environment name"),
+    file: Path = typer.Option(..., "--file", "-f", help="YAML file to import"),
+    no_replace: bool = typer.Option(False, "--no-replace", help="Don't delete existing values (merge mode)"),
+):
+    """
+    Import YAML file into PSA-OPS.
+
+    Parses YAML and upserts config values to PSA-OPS database.
+    By default, replaces all existing config for the level+key.
+
+    Examples:
+        psa dpk data import tier DEV --file DEV.yaml
+        psa dpk data import environment HRPRD --file HRPRD.yaml
+        psa dpk data import tier PROD --file PROD.yaml --no-replace  # Merge mode
+    """
+    if level not in ['tier', 'environment']:
+        print_error(f"Invalid level: {level} (must be 'tier' or 'environment')")
+        raise typer.Exit(1)
+
+    if not file.exists():
+        print_error(f"File not found: {file}")
+        raise typer.Exit(1)
+
+    # Get config and connect to PSA-OPS
+    config = get_config()
+    if not config.ops.is_configured():
+        print_error("PSA-OPS not configured. Run 'psa config setup' first")
+        raise typer.Exit(1)
+
+    client = ApiClient(config.ops.url)
+
+    # Read YAML file
+    try:
+        yaml_content = file.read_text()
+    except Exception as e:
+        print_error(f"Failed to read {file}: {e}")
+        raise typer.Exit(1)
+
+    # Import via API
+    print_info(f"Importing {file} as {level}/{key}...")
+    try:
+        result = client.import_yaml(
+            level=level,
+            level_key=key,
+            yaml_content=yaml_content,
+            replace_all=not no_replace
+        )
+    except Exception as e:
+        print_error(f"Import failed: {e}")
+        raise typer.Exit(1)
+
+    # Show results
+    counts = result.get("import_counts", {})
+    created = counts.get("created", 0)
+    updated = counts.get("updated", 0)
+    deleted = counts.get("deleted", 0)
+
+    mode = "merged" if no_replace else "replaced"
+    print_success(f"Imported {level}/{key}: {created} created, {updated} updated, {deleted} deleted ({mode})")
+
+
 @app.command("sync")
 def sync(
     tier: Optional[str] = typer.Option(None, "--tier", "-t", help="Tier name (DEV, TEST, PROD)"),
@@ -28,9 +138,9 @@ def sync(
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress config default warnings"),
 ):
     """
-    Sync Hiera YAMLs from OPS API to local Hiera paths.
+    Sync Hiera YAMLs from PSA-OPS to local Hiera paths.
 
-    Pulls tier and environment YAMLs from OPS API and writes to:
+    Pulls tier and environment YAMLs from PSA-OPS and writes to:
     - {hiera_path}/tier/{tier}.yaml
     - {hiera_path}/env/{environment}.yaml
 
@@ -40,10 +150,10 @@ def sync(
         psa dpk data sync --tier DEV --environments HRDEV --hiera-path /tmp/hiera/cust
     """
 
-    # Get config and connect to OPS
+    # Get config and connect to PSA-OPS
     config = get_config()
     if not config.ops.is_configured():
-        print_error("OPS not configured. Run 'psa config setup' first")
+        print_error("PSA-OPS not configured. Run 'psa config setup' first")
         raise typer.Exit(1)
 
     ops = config.ops
@@ -69,7 +179,7 @@ def sync(
     try:
         client.health()
     except Exception:
-        print_error("OPS not available")
+        print_error("PSA-OPS not available")
         raise typer.Exit(1)
 
     # Call sync API
@@ -116,116 +226,6 @@ def sync(
         print_info("Dry run - no files written")
     else:
         print_success(f"Synced {len(response)} YAML file(s)")
-
-
-@app.command("get")
-def get(
-    level: str = typer.Argument(..., help="Level: tier or environment"),
-    key: str = typer.Argument(..., help="Tier name or environment name"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file (or stdout)"),
-):
-    """
-    Get single YAML from OPS API.
-
-    Examples:
-        psa dpk data get tier DEV
-        psa dpk data get environment HRPRD --output HRPRD.yaml
-    """
-
-    if level not in ['tier', 'environment']:
-        print_error(f"Invalid level: {level} (must be 'tier' or 'environment')")
-        raise typer.Exit(1)
-
-    # Get config and connect to OPS
-    config = get_config()
-    if not config.ops.is_configured():
-        print_error("OPS not configured. Run 'psa config setup' first")
-        raise typer.Exit(1)
-
-    client = ApiClient(config.ops.url)
-
-    try:
-        if level == 'tier':
-            yaml_content = client.get_tier_yaml(key)
-        else:
-            yaml_content = client.get_environment_yaml(key)
-    except Exception as e:
-        print_error(f"Get failed: {e}")
-        raise typer.Exit(1)
-
-    if output:
-        try:
-            output.write_text(yaml_content)
-            print_success(f"Written: {output}")
-        except Exception as e:
-            print_error(f"Failed to write {output}: {e}")
-            raise typer.Exit(1)
-    else:
-        print(yaml_content)
-
-
-@app.command("import")
-def import_data(
-    level: str = typer.Argument(..., help="Level: tier or environment"),
-    key: str = typer.Argument(..., help="Tier name or environment name"),
-    file: Path = typer.Option(..., "--file", "-f", help="YAML file to import"),
-    no_replace: bool = typer.Option(False, "--no-replace", help="Don't delete existing values (merge mode)"),
-):
-    """
-    Import YAML file into OPS.
-
-    Parses YAML and upserts config values to OPS database.
-    By default, replaces all existing config for the level+key.
-
-    Examples:
-        psa dpk data import tier DEV --file DEV.yaml
-        psa dpk data import environment HRPRD --file HRPRD.yaml
-        psa dpk data import tier PROD --file PROD.yaml --no-replace  # Merge mode
-    """
-    if level not in ['tier', 'environment']:
-        print_error(f"Invalid level: {level} (must be 'tier' or 'environment')")
-        raise typer.Exit(1)
-
-    if not file.exists():
-        print_error(f"File not found: {file}")
-        raise typer.Exit(1)
-
-    # Get config and connect to OPS
-    config = get_config()
-    if not config.ops.is_configured():
-        print_error("OPS not configured. Run 'psa config setup' first")
-        raise typer.Exit(1)
-
-    client = ApiClient(config.ops.url)
-
-    # Read YAML file
-    try:
-        yaml_content = file.read_text()
-    except Exception as e:
-        print_error(f"Failed to read {file}: {e}")
-        raise typer.Exit(1)
-
-    # Import via API
-    print_info(f"Importing {file} as {level}/{key}...")
-    try:
-        result = client.import_yaml(
-            level=level,
-            level_key=key,
-            yaml_content=yaml_content,
-            replace_all=not no_replace
-        )
-    except Exception as e:
-        print_error(f"Import failed: {e}")
-        raise typer.Exit(1)
-
-    # Show results
-    counts = result.get("import_counts", {})
-    created = counts.get("created", 0)
-    updated = counts.get("updated", 0)
-    deleted = counts.get("deleted", 0)
-
-    mode = "merged" if no_replace else "replaced"
-    print_success(f"Imported {level}/{key}: {created} created, {updated} updated, {deleted} deleted ({mode})")
 
 
 # REMOVED: generate-from-environment command

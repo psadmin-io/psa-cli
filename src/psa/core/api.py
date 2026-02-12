@@ -1,4 +1,4 @@
-"""OPS API client for psa tools."""
+"""PSA-OPS API client for psa tools."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class ApiClient:
         data: Optional[dict] = None,
         params: Optional[dict] = None,
     ) -> dict:
-        """Make HTTP request to OPS API."""
+        """Make HTTP request to PSA-OPS API."""
         url = f"{self.base_url.rstrip('/')}{path}"
 
         if params:
@@ -120,7 +120,7 @@ class ApiClient:
         environment_id: Optional[str] = None,
         scan_source: str = "psa-discover",
     ) -> dict:
-        """Push discovery results to OPS API."""
+        """Push discovery results to PSA-OPS."""
         data = {
             "hostname": hostname,
             "domains": domains,
@@ -130,7 +130,7 @@ class ApiClient:
         return self._request("POST", "/api/v1/scan/ingest", data=data, params=params)
 
     def get_tier_yaml(self, tier: str) -> str:
-        """Get tier-level YAML from OPS API."""
+        """Get tier-level YAML from PSA-OPS."""
         url = f"{self.base_url.rstrip('/')}/api/v1/yaml/tier/{tier}"
         req = urllib.request.Request(url, method="GET")
         try:
@@ -143,7 +143,7 @@ class ApiClient:
             raise ApiError(f"Connection failed: {e.reason}")
 
     def get_environment_yaml(self, environment: str) -> str:
-        """Get environment-level YAML from OPS API."""
+        """Get environment-level YAML from PSA-OPS."""
         url = f"{self.base_url.rstrip('/')}/api/v1/yaml/environment/{environment}"
         req = urllib.request.Request(url, method="GET")
         try:
@@ -179,7 +179,7 @@ class ApiClient:
             raise ApiError(f"Connection failed: {e.reason}")
 
     def sync_yaml(self, tier: Optional[str] = None, environments: Optional[str] = None) -> dict:
-        """Sync YAMLs from OPS API. Returns dict of {path: yaml_content}."""
+        """Sync YAMLs from PSA-OPS. Returns dict of {path: yaml_content}."""
         params = {}
         if tier:
             params['tier'] = tier
@@ -194,7 +194,7 @@ class ApiClient:
         yaml_content: str,
         replace_all: bool = True
     ) -> dict:
-        """Import YAML content to OPS API.
+        """Import YAML content to PSA-OPS.
 
         Args:
             level: "tier" or "environment"
@@ -267,7 +267,7 @@ class ApiClient:
             config_type: Config file type (e.g. psappsrv.cfg)
 
         Returns:
-            Comparison result from OPS API
+            Comparison result from PSA-OPS
         """
         query_parts = [
             ("domain_ids", did) for did in domain_ids
@@ -311,7 +311,7 @@ class ApiClient:
 
 
 class ApiError(Exception):
-    """Error from OPS API."""
+    """Error from PSA-OPS API."""
 
     def __init__(self, message: str, status_code: Optional[int] = None):
         super().__init__(message)

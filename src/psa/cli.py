@@ -6,7 +6,7 @@ import typer
 from rich.console import Console
 
 from psa import __version__
-from psa.commands import cache, config, domain, dpk, ops, secrets
+from psa.commands import config, domain, dpk, ops
 
 console = Console()
 
@@ -16,15 +16,14 @@ app = typer.Typer(
     help="PeopleSoft Administration Tools",
     no_args_is_help=True,
     rich_markup_mode="rich",
+    add_completion=False,
 )
 
-# Register subcommands
+# Register subcommands (alphabetized)
+app.add_typer(config.app, name="config")
 app.add_typer(domain.app, name="domain")
 app.add_typer(dpk.app, name="dpk")
-app.add_typer(secrets.app, name="secrets", hidden=True)
-app.add_typer(cache.app, name="cache", hidden=True)
 app.add_typer(ops.app, name="ops")
-app.add_typer(config.app, name="config")
 
 
 def version_callback(value: bool) -> None:
@@ -45,11 +44,7 @@ def main(
         help="Show version and exit.",
     ),
 ) -> None:
-    """
-    PeopleSoft Administration Tools.
-
-    A unified CLI for managing PeopleSoft domains, secrets, and utilities.
-    """
+    """A unified CLI for managing PeopleSoft domains and DPK deployments."""
     pass
 
 
