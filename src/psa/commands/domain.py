@@ -6,7 +6,6 @@ import urllib.request
 from typing import Optional
 
 import typer
-from rich.console import Console
 from rich.table import Table
 
 from psa.core.config import get_config
@@ -14,10 +13,19 @@ from psa.core.discovery import run_discovery
 from psa.core.domain import DomainDiscovery, DomainInfo
 from psa.core.domain_cache import get_cached_domain_id
 from psa.core.api import ApiClient, ApiError
-from psa.core.output import print_domains_table, print_error, print_info, print_json, print_success, print_warning
+from psa.core.output import (
+    Verbosity,
+    console,
+    get_verbosity,
+    print_domains_table,
+    print_error,
+    print_info,
+    print_json,
+    print_success,
+    print_warning,
+    run_step,
+)
 from psa.core.psadmin import PsadminExecutor, PsadminResult
-
-console = Console()
 
 app = typer.Typer(
     name="domain",
@@ -111,7 +119,7 @@ def _report_status_to_api(name: str, status_str: str) -> None:
     try:
         client = ApiClient(config.ops.url)
         client.update_domain(domain_id, status=api_status)
-        console.print("[dim]\u2191 reported[/dim]")
+        console.print("[dim]↑ reported[/dim]")
     except Exception as e:
         print_warning(f"report failed: {e}")
 
@@ -201,27 +209,14 @@ def bounce(
 
     print_info(f"Bouncing {domain.domain_type} domain: {name}")
 
-    # Stop
-    console.print("  [dim]Stopping...[/dim]")
-    result = _execute_domain_command(domain, "stop", executor)
+    run_step("Stopping", lambda: _execute_domain_command(domain, "stop", executor))
+    run_step("Purging cache", lambda: _execute_domain_command(domain, "purge", executor))
 
-    # Purge
-    console.print("  [dim]Purging cache...[/dim]")
-    _execute_domain_command(domain, "purge", executor)
-
-    # Flush (skip for PIA)
     if domain.domain_type != "pia":
-        console.print("  [dim]Flushing IPC...[/dim]")
-        _execute_domain_command(domain, "flush", executor)
+        run_step("Flushing IPC", lambda: _execute_domain_command(domain, "flush", executor))
+        run_step("Configuring", lambda: _execute_domain_command(domain, "configure", executor))
 
-    # Configure (skip for PIA)
-    if domain.domain_type != "pia":
-        console.print("  [dim]Configuring...[/dim]")
-        _execute_domain_command(domain, "configure", executor)
-
-    # Start
-    console.print("  [dim]Starting...[/dim]")
-    result = _execute_domain_command(domain, "start", executor)
+    result = run_step("Starting", lambda: _execute_domain_command(domain, "start", executor))
 
     if result.success:
         print_success(f"Domain {name} bounced")
@@ -257,7 +252,7 @@ def configure(
 
     executor = _get_executor()
     print_info(f"Configuring {domain.domain_type} domain: {name}")
-    result = _execute_domain_command(domain, "configure", executor)
+    result = run_step("Configuring", lambda: _execute_domain_command(domain, "configure", executor))
 
     if result.success:
         print_success(f"Domain {name} configured")
@@ -411,7 +406,7 @@ def flush(
 
     executor = _get_executor()
     print_info(f"Flushing IPC for {domain.domain_type} domain: {name}")
-    result = _execute_domain_command(domain, "flush", executor)
+    result = run_step("Flushing IPC", lambda: _execute_domain_command(domain, "flush", executor))
 
     if result.success:
         print_success(f"Domain {name} IPC flushed")
@@ -443,7 +438,7 @@ def kill(
 
     executor = _get_executor()
     print_info(f"Force stopping {domain.domain_type} domain: {name}")
-    result = _execute_domain_command(domain, "kill", executor)
+    result = run_step("Killing", lambda: _execute_domain_command(domain, "kill", executor))
 
     if result.success:
         print_success(f"Domain {name} killed")
@@ -472,19 +467,45 @@ def list_domains(
     domains = run_discovery(config, domain_type)
     domain_dicts = [d.to_dict() for d in domains]
 
-    # Strip config from table output
-    if not json_output:
-        for d in domain_dicts:
-            d.pop("config", None)
-
     if json_output:
         print_json(domain_dicts)
+        return
+
+    if not domains:
+        console.print("[dim]No domains found[/dim]")
+        console.print(f"[dim]Searched: {config.get_ps_cfg_home()}[/dim]")
+        return
+
+    if get_verbosity() >= Verbosity.VERBOSE:
+        table = Table(title="PeopleSoft Domains")
+        table.add_column("Name", style="cyan")
+        table.add_column("Type", style="magenta")
+        table.add_column("Status", style="green")
+        table.add_column("DB", style="white")
+        table.add_column("Port", style="white")
+        table.add_column("App Server", style="white")
+        table.add_column("Profile", style="white")
+        table.add_column("Path", style="dim")
+        for d in domain_dicts:
+            cfg = d.get("config", {})
+            status = d.get("status", "unknown")
+            status_style = "green" if status == "running" else "red"
+            table.add_row(
+                d.get("name", "unknown"),
+                d.get("type", "unknown"),
+                f"[{status_style}]{status}[/{status_style}]",
+                cfg.get("db_name", ""),
+                cfg.get("jolt_port", ""),
+                cfg.get("app_server", ""),
+                cfg.get("web_profile", ""),
+                str(d.get("path", "")),
+            )
+        console.print(table)
     else:
-        if not domains:
-            console.print("[dim]No domains found[/dim]")
-            console.print(f"[dim]Searched: {config.get_ps_cfg_home()}[/dim]")
-        else:
-            print_domains_table(domain_dicts)
+        # Strip config from default table output
+        for d in domain_dicts:
+            d.pop("config", None)
+        print_domains_table(domain_dicts)
 
 
 @app.command("purge")
@@ -510,7 +531,7 @@ def purge(
 
     executor = _get_executor()
     print_info(f"Purging cache for {domain.domain_type} domain: {name}")
-    result = _execute_domain_command(domain, "purge", executor)
+    result = run_step("Purging cache", lambda: _execute_domain_command(domain, "purge", executor))
 
     if result.success:
         print_success(f"Domain {name} cache purged")
@@ -556,17 +577,9 @@ def reconfigure(
 
     print_info(f"Reconfiguring {domain.domain_type} domain: {name}")
 
-    # Stop
-    console.print("  [dim]Stopping...[/dim]")
-    _execute_domain_command(domain, "stop", executor)
-
-    # Configure
-    console.print("  [dim]Configuring...[/dim]")
-    _execute_domain_command(domain, "configure", executor)
-
-    # Start
-    console.print("  [dim]Starting...[/dim]")
-    result = _execute_domain_command(domain, "start", executor)
+    run_step("Stopping", lambda: _execute_domain_command(domain, "stop", executor))
+    run_step("Configuring", lambda: _execute_domain_command(domain, "configure", executor))
+    result = run_step("Starting", lambda: _execute_domain_command(domain, "start", executor))
 
     if result.success:
         print_success(f"Domain {name} reconfigured")
@@ -608,13 +621,11 @@ def restart(
 
     print_info(f"Restarting {domain.domain_type} domain: {name}")
 
-    # Stop
-    result = _execute_domain_command(domain, "stop", executor)
-    if not result.success:
-        print_warning(f"Stop returned non-zero: {result.output}")
+    stop_result = run_step("Stopping", lambda: _execute_domain_command(domain, "stop", executor))
+    if not stop_result.success:
+        print_warning(f"Stop returned non-zero: {stop_result.output}")
 
-    # Start
-    result = _execute_domain_command(domain, "start", executor)
+    result = run_step("Starting", lambda: _execute_domain_command(domain, "start", executor))
     if result.success:
         print_success(f"Domain {name} restarted")
     else:
@@ -712,7 +723,7 @@ def start(
         executor.config.parallel_boot = False
 
     print_info(f"Starting {domain.domain_type} domain: {name}")
-    result = _execute_domain_command(domain, "start", executor)
+    result = run_step("Starting", lambda: _execute_domain_command(domain, "start", executor))
 
     if result.success:
         print_success(f"Domain {name} started")
@@ -770,7 +781,7 @@ def status(
 
     if json_output:
         console.print_json(json.dumps(_format_status_json(domain, result)))
-    elif full:
+    elif full or get_verbosity() == Verbosity.VERBOSE:
         console.print(result.output)
     else:
         # Short output
@@ -817,7 +828,7 @@ def stop(
     action = "kill" if force else "stop"
 
     print_info(f"Stopping {domain.domain_type} domain: {name}")
-    result = _execute_domain_command(domain, action, executor)
+    result = run_step("Stopping", lambda: _execute_domain_command(domain, action, executor))
 
     if result.success:
         print_success(f"Domain {name} stopped")

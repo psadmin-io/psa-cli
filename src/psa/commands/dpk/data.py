@@ -135,7 +135,6 @@ def sync(
         help="Hiera cust/ directory path"
     ),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would sync without writing"),
-    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress config default warnings"),
 ):
     """
     Sync Hiera YAMLs from PSA-OPS to local Hiera paths
@@ -167,8 +166,8 @@ def sync(
         environments = ops.environment_name
         defaulted.append(f"environments={environments}")
 
-    # Show warning for defaulted values
-    if defaulted and not quiet and not ops.suppress_fact_warnings:
+    # Show warning for defaulted values (print_warning is verbosity-aware)
+    if defaulted and not ops.suppress_fact_warnings:
         print_warning(f"Using config defaults: {', '.join(defaulted)}")
 
     if not tier and not environments:

@@ -748,12 +748,6 @@ def apply(
         "--dpk-path",
         help=f"Path to DPK installation (or ${ENV_DPK_BASE})",
     ),
-    quiet: bool = typer.Option(
-        False,
-        "--quiet",
-        "-q",
-        help="Suppress config default warnings",
-    ),
 ) -> None:
     """
     Apply DPK configuration
@@ -846,8 +840,8 @@ def apply(
         role = ops.ps_role
         defaulted.append(f"role={role}")
 
-    # Show warning for defaulted values
-    if defaulted and not quiet and not ops.suppress_fact_warnings:
+    # Show warning for defaulted values (print_warning is verbosity-aware)
+    if defaulted and not ops.suppress_fact_warnings:
         print_warning(f"Using config defaults: {', '.join(defaulted)}")
 
     # Build Facter environment variables
@@ -1421,7 +1415,6 @@ def sync(
                 environments=environments,
                 hiera_path=hiera_path,
                 dry_run=dry_run,
-                quiet=True,
             )
         except Exception as e:
             print_warning(f"PSA-OPS sync failed: {e}")
