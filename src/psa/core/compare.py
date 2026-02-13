@@ -119,7 +119,7 @@ def parse_config_to_flat(content: str, config_type: str) -> Dict[str, Optional[s
 
 def _parse_ini(content: str) -> Dict[str, Optional[str]]:
     """Parse INI content to Section.Key flat dict, preserving case."""
-    parser = configparser.ConfigParser()
+    parser = configparser.RawConfigParser()
     parser.optionxform = str  # preserve case
     parser.read_string(content)
 
