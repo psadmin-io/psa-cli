@@ -157,7 +157,18 @@ def config_show() -> None:
         console.print(f"  PS_CFG_HOME: {config.ps_cfg_home}")
     if config.ps_home:
         console.print(f"  PS_HOME: {config.ps_home}")
+    if config.ps_app_home:
+        console.print(f"  PS_APP_HOME: {config.ps_app_home}")
+    if config.ps_cust_home:
+        console.print(f"  PS_CUST_HOME: {config.ps_cust_home}")
+    if config.multi_homes:
+        console.print(f"  Multi-homes: {', '.join(str(p) for p in config.multi_homes)}")
     console.print(f"  Runtime user: {config.runtime_user}")
+
+    console.print("\n[bold]Options:[/bold]")
+    console.print(f"  sudo_enabled: {config.sudo_enabled}")
+    console.print(f"  parallel_boot: {config.parallel_boot}")
+    console.print(f"  skip_domain_confirm: {config.skip_domain_confirm}")
 
     if config.ops.is_configured():
         console.print("\n[bold]PSA-OPS:[/bold]")
@@ -170,6 +181,10 @@ def config_show() -> None:
             console.print(f"  Tier: {config.ops.tier}")
         if config.ops.pillar:
             console.print(f"  Pillar: {config.ops.pillar}")
+        if config.ops.zone:
+            console.print(f"  Zone: {config.ops.zone}")
+        if config.ops.suppress_fact_warnings:
+            console.print(f"  Suppress fact warnings: {config.ops.suppress_fact_warnings}")
         if config.ops.ps_role:
             console.print(f"  Role: {config.ops.ps_role}")
     else:
