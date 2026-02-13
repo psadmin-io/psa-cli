@@ -24,6 +24,7 @@ from psa.core.output import (
     print_success,
     print_warning,
     run_step,
+    set_verbosity,
 )
 from psa.core.psadmin import PsadminExecutor, PsadminResult
 
@@ -32,6 +33,14 @@ app = typer.Typer(
     help="Manage PeopleSoft domains",
     no_args_is_help=True,
 )
+
+
+def _apply_verbosity(quiet: bool, verbose: bool) -> None:
+    """Apply quiet/verbose flags (subcommand-level override)."""
+    if quiet is True:
+        set_verbosity(Verbosity.QUIET)
+    elif verbose is True:
+        set_verbosity(Verbosity.VERBOSE)
 
 
 def _find_domain(name: str, domain_type: Optional[str] = None) -> Optional[DomainInfo]:
@@ -252,6 +261,8 @@ def bounce(
         "-t",
         help="Domain type (app, prcs, pia)",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """
     Full domain bounce
@@ -261,6 +272,7 @@ def bounce(
         psa domain bounce              # bounce all domains
         psa domain bounce --type app   # bounce all app domains
     """
+    _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     if not _confirm_targets(domains, "bounce", all_mode=name is None):
         raise typer.Abort()
@@ -310,6 +322,8 @@ def configure(
         "-t",
         help="Domain type (app, prcs)",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """
     Stop and configure a domain
@@ -320,6 +334,7 @@ def configure(
         psa domain configure              # configure all (skips PIA)
         psa domain configure --type app   # configure all app domains
     """
+    _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type, skip_types={"pia"} if name is None else None)
     if name is not None and domains[0].domain_type == "pia":
         print_error("Configure not supported for PIA domains")
@@ -391,6 +406,8 @@ def drift(
         "-j",
         help="Output as JSON",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """
     Show config drift for a domain
@@ -402,6 +419,7 @@ def drift(
         psa domain drift APPDOM
         psa domain drift APPDOM --type psappsrv.cfg
     """
+    _apply_verbosity(quiet, verbose)
     config = get_config()
     if not config.ops.is_configured():
         print_error("PSA-OPS not configured. Run 'psa config setup' first")
@@ -491,6 +509,8 @@ def flush(
         "-t",
         help="Domain type (app, prcs)",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """
     Clear domain IPC resources
@@ -500,6 +520,7 @@ def flush(
         psa domain flush              # flush all (skips PIA)
         psa domain flush --type app   # flush all app domains
     """
+    _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type, skip_types={"pia"} if name is None else None)
     if name is not None and domains[0].domain_type == "pia":
         print_warning("Flush not applicable for PIA domains")
@@ -533,6 +554,8 @@ def kill(
         "-t",
         help="Domain type (app, prcs, pia)",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """
     Force stop a domain
@@ -542,6 +565,7 @@ def kill(
         psa domain kill              # kill all domains
         psa domain kill --type app   # kill all app domains
     """
+    _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     if not _confirm_targets(domains, "kill", all_mode=name is None):
         raise typer.Abort()
@@ -583,8 +607,11 @@ def list_domains(
         "-j",
         help="Output as JSON",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """List all domains"""
+    _apply_verbosity(quiet, verbose)
     config = get_config()
     domains = run_discovery(config, domain_type)
     domain_dicts = [d.to_dict() for d in domains]
@@ -639,6 +666,8 @@ def purge(
         "-t",
         help="Domain type (app, prcs, pia)",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """
     Clear domain cache
@@ -648,6 +677,7 @@ def purge(
         psa domain purge              # purge all domains
         psa domain purge --type app   # purge all app domains
     """
+    _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     if not _confirm_targets(domains, "purge", all_mode=name is None):
         raise typer.Abort()
@@ -684,6 +714,8 @@ def restart(
         "-t",
         help="Domain type (app, prcs, pia)",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """
     Restart a domain
@@ -693,6 +725,7 @@ def restart(
         psa domain restart              # restart all domains
         psa domain restart --type app   # restart all app domains
     """
+    _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     if not _confirm_targets(domains, "restart", all_mode=name is None):
         raise typer.Abort()
@@ -735,6 +768,8 @@ def set_env(
         envvar="PSA_OPS_URL",
         help="PSA-OPS URL (or uses saved config from psa config setup)",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """
     Assign an environment to a domain in PSA-OPS
@@ -743,6 +778,7 @@ def set_env(
         psa domain set-env abc123 def456
         psa domain set-env abc123 def456 --ops-url http://ops:8002
     """
+    _apply_verbosity(quiet, verbose)
     config = get_config()
 
     effective_ops_url = ops_url
@@ -796,6 +832,8 @@ def start(
         "-t",
         help="Domain type (app, prcs, pia)",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """
     Start a domain
@@ -806,6 +844,7 @@ def start(
         psa domain start              # start all domains
         psa domain start --type app   # start all app domains
     """
+    _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     if not _confirm_targets(domains, "start", all_mode=name is None):
         raise typer.Abort()
@@ -857,6 +896,8 @@ def status(
         "-r",
         help="Report status to PSA-OPS",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """
     Show status of a domain
@@ -869,6 +910,7 @@ def status(
         psa domain status                  # Status of all domains
         psa domain status --type app       # Status of all app domains
     """
+    _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     # No confirmation for read-only status
 
@@ -945,6 +987,8 @@ def stop(
         "-t",
         help="Domain type (app, prcs, pia)",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """
     Stop a domain
@@ -955,6 +999,7 @@ def stop(
         psa domain stop              # stop all domains
         psa domain stop --type app   # stop all app domains
     """
+    _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     if not _confirm_targets(domains, "stop", all_mode=name is None):
         raise typer.Abort()
