@@ -469,6 +469,11 @@ def compare(
         "-f",
         help="Compare current config vs arbitrary file",
     ),
+    latest: bool = typer.Option(
+        False,
+        "--latest",
+        help="Auto-pick newest archive backup (skip interactive picker)",
+    ),
     config_type: Optional[str] = typer.Option(
         None,
         "--type",
@@ -487,12 +492,14 @@ def compare(
     """
     Compare domain config against a previous version
 
-    Default: current config vs latest Archive backup.
+    Default: interactive archive picker.
+    Use --latest to auto-pick newest archive backup.
     Use --ops to compare against last PSA-OPS capture.
     Use --file to compare against an arbitrary file.
 
     Examples:
         psa domain compare APPDOM
+        psa domain compare APPDOM --latest
         psa domain compare APPDOM --ops
         psa domain compare APPDOM --file /path/to/old.cfg
         psa domain compare APPDOM --type psappsrv.cfg
@@ -500,8 +507,10 @@ def compare(
     """
     _apply_verbosity(quiet, verbose)
 
-    if ops and file:
-        print_error("Cannot use --ops and --file together")
+    # Validate mutual exclusion of --latest, --ops, --file
+    exclusive_count = sum([latest, ops, file is not None])
+    if exclusive_count > 1:
+        print_error("--latest, --ops, and --file are mutually exclusive")
         raise typer.Exit(1)
 
     # 1. Find domain locally
@@ -567,7 +576,7 @@ def compare(
         right_label = "Current"
 
     else:
-        # Default: compare vs latest Archive backup
+        # Default: compare vs Archive backup
         if domain.domain_type == "pia":
             print_error("Archive comparison not supported for PIA domains. Use --ops or --file instead")
             raise typer.Exit(1)
@@ -578,14 +587,30 @@ def compare(
             print_error(f"No Archive backups found for {config_name} in {archive_path}")
             raise typer.Exit(1)
 
-        latest = backups[0]
-        archive_content = fileops.read_text(latest.path)
+        # Pick which backup to compare against
+        if latest or json_output or quiet:
+            selected = backups[0]
+        else:
+            console.print(f"Archive backups for {config_name}:")
+            for i, b in enumerate(backups, 1):
+                console.print(f"  {i}. {b.name}")
+            choice = typer.prompt("Select", default="1")
+            try:
+                idx = int(choice) - 1
+                if idx < 0 or idx >= len(backups):
+                    raise ValueError
+            except ValueError:
+                print_error(f"Invalid selection: {choice}")
+                raise typer.Exit(1)
+            selected = backups[idx]
+
+        archive_content = fileops.read_text(selected.path)
         if archive_content is None:
-            print_error(f"Cannot read archive file {latest.path}")
+            print_error(f"Cannot read archive file {selected.path}")
             raise typer.Exit(1)
 
         old_flat = parse_config_to_flat(archive_content, config_name)
-        left_label = latest.name
+        left_label = selected.name
         right_label = "Current"
 
     # 5. Diff
