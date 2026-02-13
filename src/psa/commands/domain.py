@@ -299,7 +299,11 @@ def bounce(
         )
         if not stop_result.success and not _is_already_stopped(stop_result, domain):
             print_warning(f"Stop returned non-zero: {stop_result.output}")
-        run_step("Purging cache", lambda d=domain: _execute_domain_command(d, "purge", executor))
+        run_step(
+            "Purging cache",
+            lambda d=domain: _execute_domain_command(d, "purge", executor),
+            warn_if=lambda r: _is_already_purged(r),
+        )
 
         if domain.domain_type != "pia":
             run_step("Flushing IPC", lambda d=domain: _execute_domain_command(d, "flush", executor))
@@ -697,7 +701,11 @@ def purge(
     failed = 0
     for domain in domains:
         print_info(f"Purging cache for {domain.domain_type} domain: {domain.name}")
-        result = run_step("Purging cache", lambda d=domain: _execute_domain_command(d, "purge", executor))
+        result = run_step(
+            "Purging cache",
+            lambda d=domain: _execute_domain_command(d, "purge", executor),
+            warn_if=lambda r: _is_already_purged(r),
+        )
 
         if result.success:
             print_success(f"Domain {domain.name} cache purged")
