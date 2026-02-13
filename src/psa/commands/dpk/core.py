@@ -323,6 +323,16 @@ def setup(
         "--debug",
         help="Enable Puppet debug output",
     ),
+    do_prereq: bool = typer.Option(
+        False,
+        "--prereq",
+        help="Run prerequisite check only (root). Replaces old 'psa dpk prereq'.",
+    ),
+    do_postcfg: bool = typer.Option(
+        False,
+        "--postcfg",
+        help="Run post-configuration only (root). Replaces old 'psa dpk postcfg'.",
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -336,6 +346,9 @@ def setup(
     Installs PeopleTools and middleware (Tuxedo, WebLogic, DB client) without
     configuring domains. Use 'psa dpk apply' to deploy domains after setup.
 
+    Use --prereq to run prerequisite check (root only, replaces 'psa dpk prereq').
+    Use --postcfg to run post-configuration (root only, replaces 'psa dpk postcfg').
+
     Environment variables:
         DPK_INSTALL: Staging/install directory
         DPK_BASE: PeopleSoft base directory (default: /u01/app/psoft)
@@ -343,8 +356,89 @@ def setup(
     Examples:
         psa dpk setup --base-dir /u01/psft
         psa dpk setup --deploy-type tools_home
-        psa dpk setup --base-dir /u01/psft --debug
+        psa dpk setup --prereq --install-dir /tmp/dpk
+        psa dpk setup --postcfg --base-dir /u01/psft
     """
+    # --prereq and --postcfg are mutually exclusive
+    if do_prereq and do_postcfg:
+        print_error("--prereq and --postcfg are mutually exclusive")
+        raise typer.Exit(1)
+
+    # --- prereq mode ---
+    if do_prereq:
+        if os.geteuid() != 0:
+            print_warning("This command should be run as root")
+
+        install_path = _get_env_path(ENV_DPK_INSTALL, install_dir)
+        if not install_path:
+            print_error(f"Install dir not specified. Use --install-dir or set ${ENV_DPK_INSTALL}")
+            raise typer.Exit(1)
+
+        setup_script = _find_setup_script(install_path)
+        if not setup_script:
+            print_error("Setup script not found")
+            raise typer.Exit(1)
+
+        cmd = [str(setup_script), "--prereq"]
+        print_info(f"Running: {' '.join(cmd)}")
+
+        if dry_run:
+            console.print("[dim]Dry run - not executing[/dim]")
+            return
+
+        try:
+            result = subprocess.run(cmd, cwd=setup_script.parent, timeout=600)
+            if result.returncode == 0:
+                print_success("Prerequisites check completed")
+            else:
+                print_error(f"Prerequisites check failed (exit {result.returncode})")
+                raise typer.Exit(1)
+        except subprocess.TimeoutExpired:
+            print_error("Prereq check timed out")
+            raise typer.Exit(1)
+        return
+
+    # --- postcfg mode ---
+    if do_postcfg:
+        if os.geteuid() != 0:
+            print_warning("This command should be run as root")
+
+        install_path = _get_env_path(ENV_DPK_INSTALL, install_dir)
+        base_path = _get_env_path(ENV_DPK_BASE, base_dir)
+
+        if not install_path:
+            print_error(f"Install dir not specified. Use --install-dir or set ${ENV_DPK_INSTALL}")
+            raise typer.Exit(1)
+
+        if not base_path:
+            print_error(f"Base dir not specified. Use --base-dir or set ${ENV_DPK_BASE}")
+            raise typer.Exit(1)
+
+        setup_script = _find_setup_script(install_path)
+        if not setup_script:
+            print_error("Setup script not found")
+            raise typer.Exit(1)
+
+        cmd = [str(setup_script), "--postcfg", "--psft_base_dir", str(base_path)]
+        print_info(f"Running: {' '.join(cmd)}")
+
+        if dry_run:
+            console.print("[dim]Dry run - not executing[/dim]")
+            return
+
+        try:
+            result = subprocess.run(cmd, cwd=setup_script.parent, timeout=600)
+            if result.returncode == 0:
+                print_success("Post-configuration completed")
+            else:
+                print_error(f"Post-configuration failed (exit {result.returncode})")
+                raise typer.Exit(1)
+        except subprocess.TimeoutExpired:
+            print_error("Post-configuration timed out")
+            raise typer.Exit(1)
+        return
+
+    # --- default setup mode ---
     # Check prerequisites first
     if not dry_run:
         _check_dpk_prerequisites(deploy_type)
@@ -440,132 +534,6 @@ deploy_type={deploy_type.value}
         # Clean up temporary response file
         if os.path.exists(response_file_path):
             os.unlink(response_file_path)
-
-
-@app.command("prereq")
-def prereq(
-    install_dir: Optional[Path] = typer.Option(
-        None,
-        "--install-dir",
-        "-i",
-        help=f"DPK install directory (or ${ENV_DPK_INSTALL})",
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        "-n",
-        help="Show command without executing",
-    ),
-) -> None:
-    """
-    Run DPK prerequisite check (root only)
-
-    Must be run by root before non-root user can run setup.
-    Validates Oracle central inventory and permissions.
-
-    Examples:
-        sudo psa dpk prereq --install-dir /tmp/dpk
-    """
-    # Check if root
-    if os.geteuid() != 0:
-        print_warning("This command should be run as root")
-
-    install_path = _get_env_path(ENV_DPK_INSTALL, install_dir)
-    if not install_path:
-        print_error(f"Install dir not specified. Use --install-dir or set ${ENV_DPK_INSTALL}")
-        raise typer.Exit(1)
-
-    setup_script = _find_setup_script(install_path)
-    if not setup_script:
-        print_error("Setup script not found")
-        raise typer.Exit(1)
-
-    cmd = [str(setup_script), "--prereq"]
-    print_info(f"Running: {' '.join(cmd)}")
-
-    if dry_run:
-        console.print("[dim]Dry run - not executing[/dim]")
-        return
-
-    try:
-        result = subprocess.run(cmd, cwd=setup_script.parent, timeout=600)
-        if result.returncode == 0:
-            print_success("Prerequisites check completed")
-        else:
-            print_error(f"Prerequisites check failed (exit {result.returncode})")
-            raise typer.Exit(1)
-    except subprocess.TimeoutExpired:
-        print_error("Prereq check timed out")
-        raise typer.Exit(1)
-
-
-@app.command("postcfg")
-def postcfg(
-    install_dir: Optional[Path] = typer.Option(
-        None,
-        "--install-dir",
-        "-i",
-        help=f"DPK install directory (or ${ENV_DPK_INSTALL})",
-    ),
-    base_dir: Optional[Path] = typer.Option(
-        None,
-        "--base-dir",
-        "-b",
-        help=f"PeopleSoft base directory (or ${ENV_DPK_BASE})",
-        ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        "-n",
-        help="Show command without executing",
-    ),
-) -> None:
-    """
-    Run DPK post-configuration (root only)
-
-    Must be run by root after non-root user completes setup.
-    Completes Oracle Database Client setup for mid-tier deployments.
-
-    Examples:
-        sudo psa dpk postcfg --base-dir /u01/psft
-    """
-    # Check if root
-    if os.geteuid() != 0:
-        print_warning("This command should be run as root")
-
-    install_path = _get_env_path(ENV_DPK_INSTALL, install_dir)
-    base_path = _get_env_path(ENV_DPK_BASE, base_dir)
-
-    if not install_path:
-        print_error(f"Install dir not specified. Use --install-dir or set ${ENV_DPK_INSTALL}")
-        raise typer.Exit(1)
-
-    if not base_path:
-        print_error(f"Base dir not specified. Use --base-dir or set ${ENV_DPK_BASE}")
-        raise typer.Exit(1)
-
-    setup_script = _find_setup_script(install_path)
-    if not setup_script:
-        print_error("Setup script not found")
-        raise typer.Exit(1)
-
-    cmd = [str(setup_script), "--postcfg", "--psft_base_dir", str(base_path)]
-    print_info(f"Running: {' '.join(cmd)}")
-
-    if dry_run:
-        console.print("[dim]Dry run - not executing[/dim]")
-        return
-
-    try:
-        result = subprocess.run(cmd, cwd=setup_script.parent, timeout=600)
-        if result.returncode == 0:
-            print_success("Post-configuration completed")
-        else:
-            print_error(f"Post-configuration failed (exit {result.returncode})")
-            raise typer.Exit(1)
-    except subprocess.TimeoutExpired:
-        print_error("Post-configuration timed out")
-        raise typer.Exit(1)
 
 
 @app.command("cleanup")
@@ -987,210 +955,6 @@ def _verify_puppet(exit_on_fail: bool = True) -> bool:
     return False
 
 
-@app.command("hiera")
-def hiera(
-    dpk_path: Path = typer.Option(
-        ...,
-        "--dpk-path",
-        "-d",
-        help="DPK directory (e.g., /opt/oracle/psft/dpk)",
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        "-n",
-        help="Show what would be done without making changes",
-    ),
-) -> None:
-    """
-    Install custom hiera.yaml for tier/environment lookups
-
-    Copies hiera.yaml to both puppet/ and puppet/production/ directories,
-    backing up existing files with .bak suffix.
-
-    Examples:
-        psa dpk hiera --dpk-path /opt/oracle/psft/dpk
-        psa dpk hiera -d $DPK_BASE/dpk --dry-run
-    """
-    resolved_path = dpk_path.resolve()
-
-    if not resolved_path.exists():
-        print_error(f"DPK path not found: {resolved_path}")
-        raise typer.Exit(1)
-
-    puppet_dir = resolved_path / "puppet"
-    if not puppet_dir.exists():
-        print_error(f"Puppet directory not found: {puppet_dir}")
-        print_info("Run 'psa dpk setup' first")
-        raise typer.Exit(1)
-
-    # Target locations
-    targets = [
-        puppet_dir / "hiera.yaml",
-        puppet_dir / "production" / "hiera.yaml",
-    ]
-
-    for target in targets:
-        target_dir = target.parent
-        if not target_dir.exists():
-            print_warning(f"Directory not found, skipping: {target_dir}")
-            continue
-
-        backup = target.with_suffix(".yaml.bak")
-
-        if dry_run:
-            if target.exists():
-                print_info(f"Would backup: {target} -> {backup}")
-            print_info(f"Would write: {target}")
-        else:
-            # Backup existing
-            if target.exists():
-                shutil.copy2(target, backup)
-                print_info(f"Backed up: {target} -> {backup}")
-
-            # Write new hiera.yaml
-            target.write_text(HIERA_YAML_TEMPLATE)
-            print_success(f"Installed: {target}")
-
-    if not dry_run:
-        print_success("hiera.yaml installed for tier/environment lookups")
-
-
-@app.command("site")
-def site(
-    dpk_path: Path = typer.Option(
-        ...,
-        "--dpk-path",
-        "-d",
-        help="DPK directory (e.g., /opt/oracle/psft/dpk)",
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        "-n",
-        help="Show what would be done without making changes",
-    ),
-) -> None:
-    """
-    Install custom site.pp for role-based node classification
-
-    Copies site.pp to puppet/production/manifests/, backing up existing
-    file with .bak suffix. Uses ps_role fact to select io_role class.
-
-    Examples:
-        psa dpk site --dpk-path /opt/oracle/psft/dpk
-        psa dpk site -d $DPK_BASE/dpk --dry-run
-    """
-    resolved_path = dpk_path.resolve()
-
-    if not resolved_path.exists():
-        print_error(f"DPK path not found: {resolved_path}")
-        raise typer.Exit(1)
-
-    manifests_dir = resolved_path / "puppet" / "production" / "manifests"
-    if not manifests_dir.exists():
-        print_error(f"Manifests directory not found: {manifests_dir}")
-        print_info("Run 'psa dpk setup' first")
-        raise typer.Exit(1)
-
-    target = manifests_dir / "site.pp"
-    backup = target.with_suffix(".pp.bak")
-
-    if dry_run:
-        if target.exists():
-            print_info(f"Would backup: {target} -> {backup}")
-        print_info(f"Would write: {target}")
-    else:
-        # Backup existing
-        if target.exists():
-            shutil.copy2(target, backup)
-            print_info(f"Backed up: {target} -> {backup}")
-
-        # Write new site.pp
-        target.write_text(SITE_PP_TEMPLATE)
-        print_success(f"Installed: {target}")
-        print_success("site.pp installed for role-based provisioning")
-
-
-@app.command("modules")
-def modules(
-    dpk_path: Path = typer.Option(
-        ...,
-        "--dpk-path",
-        "-d",
-        help="DPK directory (e.g., /opt/oracle/psft/dpk)",
-    ),
-    dry_run: bool = typer.Option(
-        False,
-        "--dry-run",
-        "-n",
-        help="Show what would be done without making changes",
-    ),
-) -> None:
-    """
-    Deploy custom DPK modules (io_profile, io_role)
-
-    Copies io_profile and io_role modules to puppet/production/modules/,
-    backing up existing directories with .bak suffix.
-
-    Examples:
-        psa dpk modules --dpk-path /opt/oracle/psft/dpk
-        psa dpk modules -d $DPK_BASE/dpk --dry-run
-    """
-    resolved_path = dpk_path.resolve()
-
-    if not resolved_path.exists():
-        print_error(f"DPK path not found: {resolved_path}")
-        raise typer.Exit(1)
-
-    modules_dir = resolved_path / "puppet" / "production" / "modules"
-    if not modules_dir.exists():
-        print_error(f"Modules directory not found: {modules_dir}")
-        print_info("Run 'psa dpk setup' first")
-        raise typer.Exit(1)
-
-    # Find source modules relative to this file
-    # core.py is at: node/src/psa/commands/dpk/core.py
-    # modules are at: node/dpk/puppet/production/modules/
-    psa_root = Path(__file__).resolve().parent.parent.parent.parent.parent
-    source_modules = psa_root / "dpk" / "puppet" / "production" / "modules"
-
-    if not source_modules.exists():
-        print_error(f"Source modules not found: {source_modules}")
-        raise typer.Exit(1)
-
-    # Modules to deploy
-    module_names = ["io_profile", "io_role"]
-
-    for module_name in module_names:
-        source = source_modules / module_name
-        target = modules_dir / module_name
-        backup = modules_dir / f"{module_name}.bak"
-
-        if not source.exists():
-            print_warning(f"Source module not found, skipping: {source}")
-            continue
-
-        if dry_run:
-            if target.exists():
-                print_info(f"Would backup: {target} -> {backup}")
-            print_info(f"Would copy: {source} -> {target}")
-        else:
-            # Backup existing
-            if target.exists():
-                if backup.exists():
-                    shutil.rmtree(backup)
-                shutil.move(str(target), str(backup))
-                print_info(f"Backed up: {target} -> {backup}")
-
-            # Copy module
-            shutil.copytree(source, target)
-            print_success(f"Installed: {target}")
-
-    if not dry_run:
-        print_success("Custom modules deployed (io_profile, io_role)")
-
-
 # --- Helper functions for sync command ---
 
 
@@ -1321,23 +1085,37 @@ def sync(
         "-s",
         help="Source path (or $IO_HOME)",
     ),
-    sync_ops: bool = typer.Option(
+    do_hiera: bool = typer.Option(
         False,
-        "--ops",
-        "-r",
-        help="Also sync Hiera data from PSA-OPS",
+        "--hiera",
+        help="Sync hiera.yaml only (default: sync all)",
+    ),
+    do_site: bool = typer.Option(
+        False,
+        "--site",
+        help="Sync site.pp only (default: sync all)",
+    ),
+    do_modules: bool = typer.Option(
+        False,
+        "--modules",
+        help="Sync custom modules only (default: sync all)",
+    ),
+    sync_data: bool = typer.Option(
+        False,
+        "--data",
+        help="Sync Hiera data from PSA-OPS (replaces 'psa dpk data sync')",
     ),
     tier: Optional[str] = typer.Option(
         None,
         "--tier",
         "-t",
-        help="Tier for ops sync (with --ops)",
+        help="Tier for data sync (with --data)",
     ),
     environments: Optional[str] = typer.Option(
         None,
         "--environments",
         "-e",
-        help="Environments for ops sync, comma-separated (with --ops)",
+        help="Environments for data sync, comma-separated (with --data)",
     ),
     dry_run: bool = typer.Option(
         False,
@@ -1350,13 +1128,18 @@ def sync(
     Sync custom DPK files to local installation
 
     Deploys hiera.yaml, site.pp, and io_profile/io_role modules in one command.
-    Optionally syncs Hiera data from PSA-OPS with --ops flag.
+    Use --hiera, --site, or --modules to sync only specific components.
+    Use --data to sync Hiera data from PSA-OPS (replaces 'psa dpk data sync').
 
     Examples:
         psa dpk sync --dpk-path /opt/oracle/psft/dpk
-        psa dpk sync -d $DPK_BASE/dpk --ops --tier nonprod
+        psa dpk sync --hiera --site
+        psa dpk sync --data --tier nonprod
         psa dpk sync --dry-run
     """
+    # If none of the filter flags specified, sync all three
+    sync_all = not (do_hiera or do_site or do_modules)
+
     # Resolve DPK path
     resolved_dpk = _get_env_path(ENV_DPK_BASE, dpk_path)
     if not resolved_dpk:
@@ -1387,30 +1170,30 @@ def sync(
     console.print("[bold]Syncing custom DPK configuration...[/bold]")
 
     # Deploy hiera.yaml
-    if not _deploy_hiera_files(resolved_dpk, dry_run):
-        raise typer.Exit(1)
+    if sync_all or do_hiera:
+        if not _deploy_hiera_files(resolved_dpk, dry_run):
+            raise typer.Exit(1)
 
     # Deploy site.pp
-    if not _deploy_site_pp(resolved_dpk, dry_run):
-        raise typer.Exit(1)
+    if sync_all or do_site:
+        if not _deploy_site_pp(resolved_dpk, dry_run):
+            raise typer.Exit(1)
 
     # Deploy modules
-    if not _deploy_module_files(resolved_dpk, resolved_source, dry_run):
-        raise typer.Exit(1)
+    if sync_all or do_modules:
+        if not _deploy_module_files(resolved_dpk, resolved_source, dry_run):
+            raise typer.Exit(1)
 
     # Optionally sync OPS data
-    if sync_ops:
+    if sync_data:
         console.print()
         print_info("Syncing Hiera data from PSA-OPS...")
-        # Import here to avoid circular dependency
-        from psa.commands.dpk.data import sync as data_sync
+        from psa.commands.dpk.data import _sync_ops_data
 
-        # Build hiera path
         hiera_path = resolved_dpk / "puppet" / "production" / "data" / "cust"
 
         try:
-            # Call data sync with resolved paths
-            data_sync(
+            _sync_ops_data(
                 tier=tier,
                 environments=environments,
                 hiera_path=hiera_path,
@@ -1418,7 +1201,7 @@ def sync(
             )
         except Exception as e:
             print_warning(f"PSA-OPS sync failed: {e}")
-            print_info("Run 'psa dpk data sync' manually to retry")
+            print_info("Run 'psa dpk sync --data' to retry")
 
     console.print()
     if not dry_run:
