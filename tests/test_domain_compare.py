@@ -220,7 +220,7 @@ class TestCompareDefaultArchive:
             ("psappsrv_020126_0900_00.cfg", False),
         ]
 
-        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM"])
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM"], input="1\n")
         assert result.exit_code == 0
         assert "Port" in result.output or "JOLT Listener.Port" in result.output
 
@@ -364,4 +364,151 @@ class TestCompareMutualExclusion:
 
         result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops", "--file", "/tmp/x.cfg"])
         assert result.exit_code == 1
-        assert "Cannot use --ops and --file together" in result.output
+        assert "mutually exclusive" in result.output
+
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    def test_latest_and_ops_errors(self, mock_find, mock_cfg, mock_fileops_cls, app_domain_info, tmp_path):
+        mock_find.return_value = app_domain_info
+        mock_cfg.return_value = PsaConfig(ps_cfg_home=tmp_path, sudo_enabled=False)
+
+        mock_fileops = MagicMock()
+        mock_fileops_cls.return_value = mock_fileops
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--latest", "--ops"])
+        assert result.exit_code == 1
+        assert "mutually exclusive" in result.output
+
+
+class TestCompareLatestFlag:
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    def test_latest_skips_prompt(self, mock_find, mock_cfg, mock_fileops_cls, app_domain_info, tmp_path):
+        """--latest uses newest backup without prompting."""
+        mock_find.return_value = app_domain_info
+        mock_cfg.return_value = PsaConfig(ps_cfg_home=tmp_path, sudo_enabled=False)
+
+        mock_fileops = MagicMock()
+        mock_fileops_cls.return_value = mock_fileops
+        mock_fileops.read_text.side_effect = [CURRENT_CFG, OLD_CFG]
+        mock_fileops.exists.return_value = True
+        mock_fileops.listdir.return_value = [
+            ("psappsrv.cfg", False),
+            ("psappsrv_020126_0900_00.cfg", False),
+        ]
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--latest"])
+        assert result.exit_code == 0
+        # No "Select" prompt in output
+        assert "Select" not in result.output
+
+
+class TestCompareInteractivePicker:
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    def test_default_prompts_user(self, mock_find, mock_cfg, mock_fileops_cls, app_domain_info, tmp_path):
+        """Default mode shows numbered list and prompts."""
+        mock_find.return_value = app_domain_info
+        mock_cfg.return_value = PsaConfig(ps_cfg_home=tmp_path, sudo_enabled=False)
+
+        mock_fileops = MagicMock()
+        mock_fileops_cls.return_value = mock_fileops
+        mock_fileops.read_text.side_effect = [CURRENT_CFG, OLD_CFG]
+        mock_fileops.exists.return_value = True
+        mock_fileops.listdir.return_value = [
+            ("psappsrv.cfg", False),
+            ("psappsrv_020126_0900_00.cfg", False),
+            ("psappsrv_012526_1430_22.cfg", False),
+        ]
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM"], input="1\n")
+        assert result.exit_code == 0
+        assert "Archive backups for psappsrv.cfg" in result.output
+        assert "1." in result.output
+        assert "Select" in result.output
+
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    def test_select_second_backup(self, mock_find, mock_cfg, mock_fileops_cls, app_domain_info, tmp_path):
+        """User selects backup #2."""
+        mock_find.return_value = app_domain_info
+        mock_cfg.return_value = PsaConfig(ps_cfg_home=tmp_path, sudo_enabled=False)
+
+        mock_fileops = MagicMock()
+        mock_fileops_cls.return_value = mock_fileops
+        mock_fileops.read_text.side_effect = [CURRENT_CFG, OLD_CFG]
+        mock_fileops.exists.return_value = True
+        mock_fileops.listdir.return_value = [
+            ("psappsrv.cfg", False),
+            ("psappsrv_020126_0900_00.cfg", False),
+            ("psappsrv_012526_1430_22.cfg", False),
+        ]
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM"], input="2\n")
+        assert result.exit_code == 0
+        # The left_label should be the second backup name
+        assert "012526" in result.output
+
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    def test_invalid_selection_exits_error(self, mock_find, mock_cfg, mock_fileops_cls, app_domain_info, tmp_path):
+        """Out-of-range selection errors."""
+        mock_find.return_value = app_domain_info
+        mock_cfg.return_value = PsaConfig(ps_cfg_home=tmp_path, sudo_enabled=False)
+
+        mock_fileops = MagicMock()
+        mock_fileops_cls.return_value = mock_fileops
+        mock_fileops.read_text.return_value = CURRENT_CFG
+        mock_fileops.exists.return_value = True
+        mock_fileops.listdir.return_value = [
+            ("psappsrv_020126_0900_00.cfg", False),
+        ]
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM"], input="99\n")
+        assert result.exit_code == 1
+        assert "Invalid selection" in result.output
+
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    def test_json_implies_latest(self, mock_find, mock_cfg, mock_fileops_cls, app_domain_info, tmp_path):
+        """--json skips interactive prompt."""
+        mock_find.return_value = app_domain_info
+        mock_cfg.return_value = PsaConfig(ps_cfg_home=tmp_path, sudo_enabled=False)
+
+        mock_fileops = MagicMock()
+        mock_fileops_cls.return_value = mock_fileops
+        mock_fileops.read_text.side_effect = [CURRENT_CFG, OLD_CFG]
+        mock_fileops.exists.return_value = True
+        mock_fileops.listdir.return_value = [
+            ("psappsrv_020126_0900_00.cfg", False),
+        ]
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--json"])
+        assert result.exit_code == 0
+        assert "Select" not in result.output
+
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    def test_quiet_implies_latest(self, mock_find, mock_cfg, mock_fileops_cls, app_domain_info, tmp_path):
+        """--quiet skips interactive prompt."""
+        mock_find.return_value = app_domain_info
+        mock_cfg.return_value = PsaConfig(ps_cfg_home=tmp_path, sudo_enabled=False)
+
+        mock_fileops = MagicMock()
+        mock_fileops_cls.return_value = mock_fileops
+        mock_fileops.read_text.side_effect = [CURRENT_CFG, OLD_CFG]
+        mock_fileops.exists.return_value = True
+        mock_fileops.listdir.return_value = [
+            ("psappsrv_020126_0900_00.cfg", False),
+        ]
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--quiet"])
+        assert result.exit_code == 0
+        assert "Select" not in result.output
