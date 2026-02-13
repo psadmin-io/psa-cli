@@ -1,0 +1,235 @@
+"""Tests for DPK command changes (source path, hiera, modules, puppet.conf)."""
+
+import os
+from pathlib import Path
+from unittest.mock import patch
+
+import yaml
+
+from psa.commands.dpk.core import (
+    _deploy_hiera_files,
+    _deploy_module_files,
+    _deploy_puppet_conf,
+    _generate_hiera_yaml,
+    _generate_puppet_conf,
+    _get_source_path,
+)
+from psa.core.config import PsaConfig
+
+
+# --- _get_source_path tests ---
+
+
+def test_get_source_path_returns_cli_arg(tmp_path):
+    """CLI --source arg takes priority."""
+    source = tmp_path / "my-source"
+    source.mkdir()
+    result = _get_source_path(source)
+    assert result == source.resolve()
+
+
+def test_get_source_path_uses_psa_kit_env(monkeypatch, tmp_path):
+    """PSA_KIT env var used when no CLI arg."""
+    kit = tmp_path / "kit"
+    monkeypatch.setenv("PSA_KIT", str(kit))
+    result = _get_source_path(None)
+    assert result == kit
+
+
+def test_get_source_path_falls_back_to_config(monkeypatch, tmp_path):
+    """Falls back to config.psa_kit_path when env not set."""
+    monkeypatch.delenv("PSA_KIT", raising=False)
+    config = PsaConfig()
+    config.psa_kit_path = tmp_path / "from-config"
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        result = _get_source_path(None)
+    assert result == tmp_path / "from-config"
+
+
+def test_get_source_path_no_io_home(monkeypatch, tmp_path):
+    """IO_HOME is no longer checked."""
+    monkeypatch.delenv("PSA_KIT", raising=False)
+    monkeypatch.setenv("IO_HOME", str(tmp_path / "io-home"))
+    config = PsaConfig()
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        result = _get_source_path(None)
+    # Should NOT return IO_HOME — falls through to package location
+    assert result != tmp_path / "io-home"
+
+
+# --- _generate_hiera_yaml tests ---
+
+
+def test_generate_hiera_yaml_with_all_paths(tmp_path):
+    """Hiera YAML includes cust, kit, and DPK layers with correct paths."""
+    cust = tmp_path / "cust"
+    kit = tmp_path / "kit"
+    result = _generate_hiera_yaml(cust, kit)
+
+    # Should contain cust datadir
+    cust_datadir = str(cust / "dpk" / "puppet" / "production" / "data")
+    assert cust_datadir in result
+
+    # Should contain kit datadir
+    kit_datadir = str(kit / "dpk" / "puppet" / "production" / "data")
+    assert kit_datadir in result
+
+    # Should contain DPK base layers (relative, no datadir)
+    assert "psft_configuration.yaml" in result
+    assert "psft_customizations.yaml" in result
+    assert "defaults.yaml" in result
+
+    # Customer layers should reference correct paths
+    assert "domain/%{facts.domainname}.yaml" in result
+    assert "server/%{facts.hostname}.yaml" in result
+    assert "tier/%{facts.ps_tier}.yaml" in result
+
+    # Kit layer
+    assert "psa-ops/common.yaml" in result
+
+
+def test_generate_hiera_yaml_no_cust():
+    """Hiera YAML without cust path skips cust layers."""
+    result = _generate_hiera_yaml(None, Path("/kit"))
+    assert "domain/" not in result
+    assert "server/" not in result
+    # Kit layer still present
+    assert "psa-ops/common.yaml" in result
+
+
+def test_generate_hiera_yaml_no_kit():
+    """Hiera YAML without kit path skips kit layer."""
+    result = _generate_hiera_yaml(Path("/cust"), None)
+    assert "psa-ops/common.yaml" not in result
+    # Cust layers still present
+    assert "domain/%{facts.domainname}.yaml" in result
+
+
+def test_generate_hiera_yaml_is_valid_yaml(tmp_path):
+    """Generated hiera.yaml is valid YAML."""
+    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit")
+    parsed = yaml.safe_load(result)
+    assert parsed["version"] == 5
+    assert "hierarchy" in parsed
+    assert isinstance(parsed["hierarchy"], list)
+
+
+def test_generate_hiera_yaml_dpk_layers_no_datadir(tmp_path):
+    """DPK base layers should not have datadir override."""
+    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit")
+    # Parse and check DPK layers
+    parsed = yaml.safe_load(result)
+    dpk_names = [
+        "DPK configuration", "DPK customizations", "DPK unix system",
+        "DPK deployment", "DPK patches", "DPK defaults",
+    ]
+    for entry in parsed["hierarchy"]:
+        if entry["name"] in dpk_names:
+            assert "datadir" not in entry, f"{entry['name']} should not have datadir"
+
+
+# --- _deploy_hiera_files tests ---
+
+
+def test_deploy_hiera_files_writes_to_puppet_dirs(dpk_tree, tmp_path):
+    """Hiera files deployed to puppet/ and puppet/production/."""
+    cust = tmp_path / "cust"
+    kit = tmp_path / "kit"
+    assert _deploy_hiera_files(dpk_tree, cust, kit, dry_run=False)
+
+    hiera_root = dpk_tree / "puppet" / "hiera.yaml"
+    hiera_prod = dpk_tree / "puppet" / "production" / "hiera.yaml"
+    assert hiera_root.exists()
+    assert hiera_prod.exists()
+
+    content = hiera_root.read_text()
+    assert str(cust / "dpk" / "puppet" / "production" / "data") in content
+
+
+def test_deploy_hiera_files_dry_run(dpk_tree, tmp_path):
+    """Dry run does not write files."""
+    assert _deploy_hiera_files(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=True)
+    assert not (dpk_tree / "puppet" / "hiera.yaml").exists()
+
+
+# --- _deploy_module_files tests ---
+
+
+def test_deploy_module_files_all_io_modules(dpk_tree, kit_source):
+    """All io_* modules from source are deployed."""
+    result = _deploy_module_files(dpk_tree, kit_source, dry_run=False)
+    assert result is True
+
+    modules_dir = dpk_tree / "puppet" / "production" / "modules"
+    deployed = sorted(d.name for d in modules_dir.iterdir() if d.is_dir())
+    assert "io_profile" in deployed
+    assert "io_role" in deployed
+    assert "io_tools" in deployed
+
+
+def test_deploy_module_files_backup_existing(dpk_tree, kit_source):
+    """Existing modules are backed up before overwrite."""
+    target = dpk_tree / "puppet" / "production" / "modules" / "io_role"
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "old.pp").write_text("old content")
+
+    _deploy_module_files(dpk_tree, kit_source, dry_run=False)
+
+    backup = dpk_tree / "puppet" / "production" / "modules" / "io_role.bak"
+    assert backup.exists()
+    assert (backup / "old.pp").exists()
+
+
+# --- _generate_puppet_conf tests ---
+
+
+def test_generate_puppet_conf_all_paths(tmp_path):
+    """puppet.conf modulepath includes cust:kit:dpk."""
+    cust = tmp_path / "cust"
+    kit = tmp_path / "kit"
+    dpk = tmp_path / "dpk"
+    result = _generate_puppet_conf(cust, kit, dpk)
+
+    cust_mod = str(cust / "dpk" / "puppet" / "production" / "modules")
+    kit_mod = str(kit / "dpk" / "puppet" / "production" / "modules")
+    dpk_mod = str(dpk / "puppet" / "production" / "modules")
+
+    assert cust_mod in result
+    assert kit_mod in result
+    assert dpk_mod in result
+
+    # Verify order: cust before kit before dpk
+    assert result.index(cust_mod) < result.index(kit_mod)
+    assert result.index(kit_mod) < result.index(dpk_mod)
+
+
+def test_generate_puppet_conf_no_cust(tmp_path):
+    """puppet.conf without cust only has kit:dpk."""
+    kit = tmp_path / "kit"
+    dpk = tmp_path / "dpk"
+    result = _generate_puppet_conf(None, kit, dpk)
+
+    kit_mod = str(kit / "dpk" / "puppet" / "production" / "modules")
+    dpk_mod = str(dpk / "puppet" / "production" / "modules")
+
+    assert kit_mod in result
+    assert dpk_mod in result
+    assert "cust" not in result
+
+
+# --- _deploy_puppet_conf tests ---
+
+
+def test_deploy_puppet_conf_writes_file(dpk_tree, tmp_path):
+    """puppet.conf is written to puppet/ directory."""
+    assert _deploy_puppet_conf(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=False)
+    target = dpk_tree / "puppet" / "puppet.conf"
+    assert target.exists()
+    content = target.read_text()
+    assert "modulepath" in content
+
+
+def test_deploy_puppet_conf_dry_run(dpk_tree, tmp_path):
+    """Dry run does not write puppet.conf."""
+    assert _deploy_puppet_conf(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=True)
+    assert not (dpk_tree / "puppet" / "puppet.conf").exists()

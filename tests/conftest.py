@@ -97,3 +97,48 @@ def mock_config(tmp_cfg_home):
         ops=OpsConfig(),
         sudo_enabled=False,
     )
+
+
+# --- New fixtures for psa-kit ---
+
+
+@pytest.fixture
+def config_file(tmp_path):
+    """Return a path for a temporary config YAML file."""
+    return tmp_path / "config.yaml"
+
+
+@pytest.fixture
+def base_config(tmp_path, config_file):
+    """Return a PsaConfig with temporary paths, saved to disk."""
+    config = PsaConfig()
+    config.ps_base = tmp_path / "psoft"
+    config.io_base = tmp_path / "io"
+    config.save(config_file)
+    return config
+
+
+@pytest.fixture
+def dpk_tree(tmp_path):
+    """Create a minimal DPK directory tree and return its root."""
+    dpk = tmp_path / "dpk"
+    (dpk / "puppet" / "production" / "manifests").mkdir(parents=True)
+    (dpk / "puppet" / "production" / "modules").mkdir(parents=True)
+    (dpk / "puppet" / "production" / "data").mkdir(parents=True)
+    return dpk
+
+
+@pytest.fixture
+def kit_source(tmp_path):
+    """Create a fake psa-kit source tree with io_* modules."""
+    kit = tmp_path / "psa-kit"
+    modules = kit / "dpk" / "puppet" / "production" / "modules"
+    for name in ["io_profile", "io_role", "io_tools"]:
+        mod_dir = modules / name
+        mod_dir.mkdir(parents=True)
+        (mod_dir / "init.pp").write_text(f"# {name}\n")
+    # Also create data dir
+    data = kit / "dpk" / "puppet" / "production" / "data" / "psa-ops"
+    data.mkdir(parents=True)
+    (data / "common.yaml").write_text("---\n# psa-ops defaults\n")
+    return kit
