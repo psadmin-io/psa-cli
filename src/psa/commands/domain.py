@@ -433,7 +433,7 @@ def _render_compare_table(
 ) -> None:
     """Render compare results as a Rich table."""
     if not changes:
-        console.print(f"[green]No differences found for {name} ({config_name})[/green]")
+        console.print(f"[green]No differences: {name} — {left_label} vs {right_label}[/green]")
         return
 
     table = Table(title=f"Compare: {name} ({config_name})")
