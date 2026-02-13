@@ -344,3 +344,60 @@ class TestAlreadyStopped:
 
         # Should NOT raise — one stopped + one OK = no failures
         stop(name=None, force=False, domain_type=None)
+
+
+ALREADY_PURGED_RESULT = PsadminResult(
+    success=False, exit_code=1, output="There is no cache to be purged.", command="test"
+)
+
+
+class TestAlreadyPurged:
+    """Test that purge on already-purged domains warns instead of fail."""
+
+    @patch("psa.commands.domain._confirm_targets", return_value=True)
+    @patch("psa.commands.domain._resolve_targets")
+    @patch("psa.commands.domain._get_executor")
+    @patch("psa.commands.domain._execute_domain_command", return_value=ALREADY_PURGED_RESULT)
+    def test_purge_already_purged_warns(self, mock_exec, mock_get_ex, mock_resolve, mock_confirm):
+        from psa.commands.domain import purge
+
+        mock_resolve.return_value = [APPDOM]
+        mock_get_ex.return_value = MagicMock()
+
+        # Should NOT raise — already purged = warning, exit 0
+        purge(name="APPDOM", domain_type=None)
+
+    @patch("psa.commands.domain._confirm_targets", return_value=True)
+    @patch("psa.commands.domain._resolve_targets")
+    @patch("psa.commands.domain._get_executor")
+    @patch("psa.commands.domain._execute_domain_command", return_value=REAL_FAIL_RESULT)
+    def test_purge_real_failure_fails(self, mock_exec, mock_get_ex, mock_resolve, mock_confirm):
+        from psa.commands.domain import purge
+
+        mock_resolve.return_value = [APPDOM]
+        mock_get_ex.return_value = MagicMock()
+
+        with pytest.raises(click.exceptions.Exit):
+            purge(name="APPDOM", domain_type=None)
+
+
+class TestSingleDomainNoSummary:
+    """Test that single-domain failures skip the ratio summary."""
+
+    @patch("psa.commands.domain._confirm_targets", return_value=True)
+    @patch("psa.commands.domain._resolve_targets")
+    @patch("psa.commands.domain._get_executor")
+    @patch("psa.commands.domain._execute_domain_command", return_value=FAIL_RESULT)
+    @patch("psa.commands.domain.print_warning")
+    def test_single_domain_no_summary(self, mock_warn, mock_exec, mock_get_ex, mock_resolve, mock_confirm):
+        from psa.commands.domain import start
+
+        mock_resolve.return_value = [APPDOM]
+        mock_get_ex.return_value = MagicMock()
+
+        with pytest.raises(click.exceptions.Exit):
+            start(name="APPDOM", serial=False, domain_type=None)
+
+        # Should NOT have printed the ratio summary
+        for call in mock_warn.call_args_list:
+            assert "succeeded" not in str(call), "ratio summary should not appear for single domain"

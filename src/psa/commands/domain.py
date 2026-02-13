@@ -223,6 +223,13 @@ def _is_already_stopped(result: PsadminResult, domain: DomainInfo) -> bool:
     return _parse_status_output(result.output, domain.domain_type) == "stopped"
 
 
+def _is_already_purged(result: PsadminResult) -> bool:
+    """Check if a failed purge means the cache was already empty."""
+    if result.success:
+        return False
+    return "no cache to be purged" in result.output.lower()
+
+
 def _format_command_error(action: str, name: str, result: PsadminResult) -> str:
     """Format error with fallback for empty psadmin output."""
     if result.output.strip():
@@ -306,8 +313,9 @@ def bounce(
             print_error(_format_command_error("start", domain.name, result))
             failed += 1
 
-    if failed:
+    if failed and len(domains) > 1:
         print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+    if failed:
         raise typer.Exit(1)
 
 
@@ -374,8 +382,9 @@ def configure(
         else:
             print_success(f"Domain {domain.name} configured")
 
-    if failed:
+    if failed and len(domains) > 1:
         print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+    if failed:
         raise typer.Exit(1)
 
 
@@ -540,8 +549,9 @@ def flush(
             print_error(_format_command_error("flush", domain.name, result))
             failed += 1
 
-    if failed:
+    if failed and len(domains) > 1:
         print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+    if failed:
         raise typer.Exit(1)
 
 
@@ -588,8 +598,9 @@ def kill(
             print_error(_format_command_error("kill", domain.name, result))
             failed += 1
 
-    if failed:
+    if failed and len(domains) > 1:
         print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+    if failed:
         raise typer.Exit(1)
 
 
@@ -690,12 +701,15 @@ def purge(
 
         if result.success:
             print_success(f"Domain {domain.name} cache purged")
+        elif _is_already_purged(result):
+            print_warning(f"Domain {domain.name} cache already empty")
         else:
             print_error(_format_command_error("purge", domain.name, result))
             failed += 1
 
-    if failed:
+    if failed and len(domains) > 1:
         print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+    if failed:
         raise typer.Exit(1)
 
 
@@ -753,8 +767,9 @@ def restart(
             print_error(_format_command_error("start", domain.name, result))
             failed += 1
 
-    if failed:
+    if failed and len(domains) > 1:
         print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+    if failed:
         raise typer.Exit(1)
 
 
@@ -864,8 +879,9 @@ def start(
             print_error(_format_command_error("start", domain.name, result))
             failed += 1
 
-    if failed:
+    if failed and len(domains) > 1:
         print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+    if failed:
         raise typer.Exit(1)
 
 
@@ -1024,6 +1040,7 @@ def stop(
             print_error(_format_command_error(action, domain.name, result))
             failed += 1
 
-    if failed:
+    if failed and len(domains) > 1:
         print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
+    if failed:
         raise typer.Exit(1)
