@@ -1,18 +1,27 @@
 """Domain management commands."""
 
 import json
-import urllib.error
-import urllib.request
+from pathlib import Path
 from typing import List, Optional, Set
 
 import typer
 from rich.table import Table
 
+from psa.core.api import ApiClient, ApiError
+from psa.core.compare import (
+    CompareResult,
+    diff_configs,
+    extract_api_properties,
+    get_primary_config,
+    list_archive_backups,
+    parse_config_to_flat,
+    resolve_pia_config_path,
+)
 from psa.core.config import get_config
 from psa.core.discovery import run_discovery
 from psa.core.domain import DomainDiscovery, DomainInfo
 from psa.core.domain_cache import get_cached_domain_id
-from psa.core.api import ApiClient, ApiError
+from psa.core.fileops import SudoFileOps
 from psa.core.output import (
     Verbosity,
     console,
@@ -404,14 +413,67 @@ def _resolve_api_domain_id(client: ApiClient, name: str) -> str:
     return domain["id"]
 
 
-@app.command("drift")
-def drift(
+def _resolve_config_path(domain: DomainInfo, config_name: str, fileops: SudoFileOps) -> Path:
+    """Resolve the live config file path for a domain."""
+    if domain.domain_type == "pia":
+        path = resolve_pia_config_path(fileops, domain.path)
+        if not path:
+            print_error(f"Cannot find configuration.properties for PIA domain '{domain.name}'")
+            raise typer.Exit(1)
+        return path
+    return domain.path / config_name
+
+
+def _render_compare_table(
+    name: str,
+    config_name: str,
+    changes: list,
+    left_label: str,
+    right_label: str,
+) -> None:
+    """Render compare results as a Rich table."""
+    if not changes:
+        console.print(f"[green]No differences found for {name} ({config_name})[/green]")
+        return
+
+    table = Table(title=f"Compare: {name} ({config_name})")
+    table.add_column("Key", style="cyan")
+    table.add_column(left_label, style="red")
+    table.add_column(right_label, style="green")
+    table.add_column("Change", style="dim")
+
+    for c in changes:
+        style = "yellow"
+        if c.change_type == "added":
+            style = "green"
+        elif c.change_type == "removed":
+            style = "red"
+        old_val = c.old_value if c.old_value is not None else "[dim]-[/dim]"
+        new_val = c.new_value if c.new_value is not None else "[dim]-[/dim]"
+        table.add_row(c.key, old_val, new_val, f"[{style}]{c.change_type}[/{style}]")
+
+    console.print(table)
+
+
+@app.command("compare")
+def compare(
     name: str = typer.Argument(..., help="Domain name"),
+    ops: bool = typer.Option(
+        False,
+        "--ops",
+        help="Compare current local config vs last PSA-OPS capture",
+    ),
+    file: Optional[str] = typer.Option(
+        None,
+        "--file",
+        "-f",
+        help="Compare current config vs arbitrary file",
+    ),
     config_type: Optional[str] = typer.Option(
         None,
         "--type",
         "-t",
-        help="Config type for detailed drift (e.g. psappsrv.cfg)",
+        help="Config type (default: primary for domain type)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -423,94 +485,134 @@ def drift(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """
-    Show config drift for a domain
+    Compare domain config against a previous version
 
-    Without --type: shows drift summary across all config types.
-    With --type: shows detailed key-level changes for that config type.
+    Default: current config vs latest Archive backup.
+    Use --ops to compare against last PSA-OPS capture.
+    Use --file to compare against an arbitrary file.
 
     Examples:
-        psa domain drift APPDOM
-        psa domain drift APPDOM --type psappsrv.cfg
+        psa domain compare APPDOM
+        psa domain compare APPDOM --ops
+        psa domain compare APPDOM --file /path/to/old.cfg
+        psa domain compare APPDOM --type psappsrv.cfg
+        psa domain compare APPDOM --json
     """
     _apply_verbosity(quiet, verbose)
+
+    if ops and file:
+        print_error("Cannot use --ops and --file together")
+        raise typer.Exit(1)
+
+    # 1. Find domain locally
+    domain = _find_domain(name)
+    if not domain:
+        print_error(f"Domain '{name}' not found")
+        raise typer.Exit(1)
+
+    # 2. Determine config type
+    config_name = config_type or get_primary_config(domain.domain_type)
+
+    # 3. Read + parse current config
     config = get_config()
-    if not config.ops.is_configured():
-        print_error("PSA-OPS not configured. Run 'psa config setup' first")
+    fileops = SudoFileOps(config)
+    config_path = _resolve_config_path(domain, config_name, fileops)
+
+    current_content = fileops.read_text(config_path)
+    if current_content is None:
+        print_error(f"Cannot read {config_path}")
         raise typer.Exit(1)
 
-    client = ApiClient(config.ops.url)
-    domain_id = _resolve_api_domain_id(client, name)
+    current_flat = parse_config_to_flat(current_content, config_name)
 
-    try:
-        if config_type:
-            result = client.get_domain_drift(domain_id, config_type)
-        else:
-            result = client.get_drift_summary(domain_id)
-    except ApiError as e:
-        print_error(f"Drift check failed: {e}")
-        raise typer.Exit(1)
+    # 4. Get comparison target
+    if ops:
+        # Compare vs last API capture
+        if not config.ops.is_configured():
+            print_error("PSA-OPS not configured. Run 'psa config setup' first")
+            raise typer.Exit(1)
 
+        client = ApiClient(config.ops.url)
+        domain_id = _resolve_api_domain_id(client, name)
+
+        try:
+            api_config = client.get_latest_config(domain_id, config_name)
+        except ApiError as e:
+            print_error(f"API error: {e}")
+            raise typer.Exit(1)
+
+        if not api_config:
+            print_error(f"No captured config for '{name}' ({config_name}) in PSA-OPS")
+            raise typer.Exit(1)
+
+        parsed_content = api_config.get("parsed_content")
+        if not parsed_content:
+            print_error(f"No parsed content in API config for '{name}'")
+            raise typer.Exit(1)
+
+        old_flat = extract_api_properties(parsed_content, config_name)
+        left_label = "OPS Capture"
+        right_label = "Current"
+
+    elif file:
+        # Compare vs arbitrary file
+        file_path = Path(file)
+        file_content = fileops.read_text(file_path)
+        if file_content is None:
+            print_error(f"Cannot read {file}")
+            raise typer.Exit(1)
+
+        old_flat = parse_config_to_flat(file_content, config_name)
+        left_label = str(file_path.name)
+        right_label = "Current"
+
+    else:
+        # Default: compare vs latest Archive backup
+        if domain.domain_type == "pia":
+            print_error("Archive comparison not supported for PIA domains. Use --ops or --file instead")
+            raise typer.Exit(1)
+
+        archive_path = domain.path / "Archive"
+        backups = list_archive_backups(fileops, archive_path, config_name)
+        if not backups:
+            print_error(f"No Archive backups found for {config_name} in {archive_path}")
+            raise typer.Exit(1)
+
+        latest = backups[0]
+        archive_content = fileops.read_text(latest.path)
+        if archive_content is None:
+            print_error(f"Cannot read archive file {latest.path}")
+            raise typer.Exit(1)
+
+        old_flat = parse_config_to_flat(archive_content, config_name)
+        left_label = latest.name
+        right_label = "Current"
+
+    # 5. Diff
+    changes = diff_configs(old_flat, current_flat)
+
+    # 6. Render
     if json_output:
-        console.print_json(json.dumps(result, default=str, indent=2))
+        data = {
+            "domain": name,
+            "config_type": config_name,
+            "has_drift": len(changes) > 0,
+            "left_label": left_label,
+            "right_label": right_label,
+            "changes": [
+                {
+                    "key": c.key,
+                    "old_value": c.old_value,
+                    "new_value": c.new_value,
+                    "change_type": c.change_type,
+                }
+                for c in changes
+            ],
+        }
+        console.print_json(json.dumps(data, default=str))
         return
 
-    if config_type:
-        # Detailed drift for a specific config type
-        changes = result.get("changes", [])
-        if not changes:
-            console.print(f"[green]No drift detected for {config_type}[/green]")
-            return
-
-        table = Table(title=f"Drift: {name} ({config_type})")
-        table.add_column("Key", style="cyan")
-        table.add_column("Previous", style="red")
-        table.add_column("Current", style="green")
-        table.add_column("Change", style="dim")
-
-        for change in changes:
-            change_type = change.get("change_type", "")
-            style = "yellow"
-            if change_type == "added":
-                style = "green"
-            elif change_type == "removed":
-                style = "red"
-
-            old_val = str(change.get("old_value", "")) if change.get("old_value") is not None else "[dim]-[/dim]"
-            new_val = str(change.get("new_value", "")) if change.get("new_value") is not None else "[dim]-[/dim]"
-
-            table.add_row(
-                change.get("key", ""),
-                old_val,
-                new_val,
-                f"[{style}]{change_type}[/{style}]",
-            )
-
-        console.print(table)
-    else:
-        # Summary across all config types
-        summaries = result.get("config_types", [])
-        if not summaries:
-            console.print(f"[green]No drift detected for {name}[/green]")
-            return
-
-        table = Table(title=f"Drift Summary: {name}")
-        table.add_column("Config Type", style="cyan")
-        table.add_column("Drift", style="white")
-        table.add_column("Changes", style="white")
-        table.add_column("Last Capture", style="dim")
-
-        for s in summaries:
-            has_drift = s.get("has_drift", False)
-            drift_style = "red" if has_drift else "green"
-            drift_text = "Yes" if has_drift else "No"
-            table.add_row(
-                s.get("config_type", ""),
-                f"[{drift_style}]{drift_text}[/{drift_style}]",
-                str(s.get("change_count", 0)),
-                str(s.get("last_capture", "")),
-            )
-
-        console.print(table)
+    _render_compare_table(name, config_name, changes, left_label, right_label)
 
 
 @app.command("flush")
@@ -778,65 +880,6 @@ def restart(
     if failed and len(domains) > 1:
         print_warning(f"{len(domains) - failed}/{len(domains)} succeeded, {failed} failed")
     if failed:
-        raise typer.Exit(1)
-
-
-@app.command("set-env")
-def set_env(
-    domain_id: str = typer.Argument(..., help="Domain ID (from PSA-OPS)"),
-    environment_id: str = typer.Argument(..., help="Environment ID to assign"),
-    ops_url: Optional[str] = typer.Option(
-        None,
-        "--ops-url",
-        envvar="PSA_OPS_URL",
-        help="PSA-OPS URL (or uses saved config from psa config setup)",
-    ),
-    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
-) -> None:
-    """
-    Assign an environment to a domain in PSA-OPS
-
-    Examples:
-        psa domain set-env abc123 def456
-        psa domain set-env abc123 def456 --ops-url http://ops:8002
-    """
-    _apply_verbosity(quiet, verbose)
-    config = get_config()
-
-    effective_ops_url = ops_url
-    if not effective_ops_url:
-        if config.ops.is_configured():
-            effective_ops_url = config.ops.url
-        else:
-            print_error("PSA-OPS not configured. Run 'psa config setup' first or use --ops-url")
-            raise typer.Exit(1)
-
-    url = f"{effective_ops_url.rstrip('/')}/api/v1/domains/{domain_id}"
-    payload = {"environment_id": environment_id}
-
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="PUT",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read().decode("utf-8"))
-            print_success(f"Domain {result.get('name', domain_id)} assigned to environment")
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode("utf-8") if e.fp else ""
-        try:
-            error_data = json.loads(error_body)
-            print_error(error_data.get("detail", str(e)))
-        except json.JSONDecodeError:
-            print_error(f"HTTP {e.code}: {error_body or str(e)}")
-        raise typer.Exit(1)
-    except urllib.error.URLError as e:
-        print_error(f"Connection failed: {e.reason}")
         raise typer.Exit(1)
 
 
