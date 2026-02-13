@@ -277,5 +277,5 @@ class TestConfigSetDpkRepoPath:
         mock_load.return_value = cfg
         result = runner.invoke(psa_app, ["config", "set", "dpk_repo_path", "/nfs/dpk"])
         assert result.exit_code == 0
-        assert cfg.dpk_repo_path == "/nfs/dpk"
+        assert cfg.dpk_repo_path == Path("/nfs/dpk")
         mock_save.assert_called_once()

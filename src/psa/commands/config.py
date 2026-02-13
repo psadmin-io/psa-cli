@@ -7,6 +7,8 @@ from rich.console import Console
 from rich.table import Table
 
 from psa.commands import init
+from pathlib import Path
+
 from psa.core.config import CONFIG_PATH, PsaConfig, get_config
 from psa.core.domain_cache import get_cached_domain_id
 from psa.core.api import ApiClient, ApiError
@@ -93,7 +95,9 @@ SETTABLE_KEYS = {
     "parallel_boot": ("bool", "Use parallelboot instead of boot"),
     "sudo_enabled": ("bool", "Use sudo to run commands as runtime_user"),
     "runtime_user": ("str", "OS user for domain commands"),
-    "dpk_repo_path": ("str", "Path to DPK file repository (PCM mount or local dir)"),
+    "dpk_repo_path": ("path", "Path to DPK file repository (PCM mount or local dir)"),
+    "psa_kit_path": ("path", "Path to PSA Kit installation"),
+    "psa_cust_path": ("path", "Path to PSA customer customizations"),
 }
 
 
@@ -129,6 +133,8 @@ def config_set(
     try:
         if val_type == "bool":
             setattr(config, key, _parse_bool(value))
+        elif val_type == "path":
+            setattr(config, key, Path(value))
         else:
             setattr(config, key, value)
     except ValueError as e:
@@ -162,6 +168,10 @@ def config_show() -> None:
         console.print(f"  PS_APP_HOME: {config.ps_app_home}")
     if config.ps_cust_home:
         console.print(f"  PS_CUST_HOME: {config.ps_cust_home}")
+    if config.psa_kit_path:
+        console.print(f"  PSA Kit: {config.psa_kit_path}")
+    if config.psa_cust_path:
+        console.print(f"  PSA Cust: {config.psa_cust_path}")
     if config.multi_homes:
         console.print(f"  Multi-homes: {', '.join(str(p) for p in config.multi_homes)}")
     console.print(f"  Runtime user: {config.runtime_user}")

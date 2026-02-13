@@ -5,7 +5,7 @@ from typing import Optional
 import typer
 
 from psa import __version__
-from psa.commands import config, domain, dpk, ops
+from psa.commands import config, domain, dpk, kit, ops
 from psa.core.output import Verbosity, console, set_verbosity
 
 # Main application
@@ -21,6 +21,7 @@ app = typer.Typer(
 app.add_typer(config.app, name="config")
 app.add_typer(domain.app, name="domain")
 app.add_typer(dpk.app, name="dpk")
+app.add_typer(kit.app, name="kit")
 app.add_typer(ops.app, name="ops")
 
 
