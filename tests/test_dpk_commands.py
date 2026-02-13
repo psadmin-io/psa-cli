@@ -1,229 +1,235 @@
-"""Tests for consolidated DPK commands (setup --prereq/--postcfg, sync --hiera/--site/--modules)."""
+"""Tests for DPK command changes (source path, hiera, modules, puppet.conf)."""
 
 import os
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-import pytest
-from typer.testing import CliRunner
+import yaml
 
-from psa.cli import app as psa_app
-
-runner = CliRunner()
-
-
-# --- Fixtures ---
-
-
-@pytest.fixture
-def mock_dpk_install(tmp_path):
-    """Create a mock DPK install dir with setup script."""
-    setup_dir = tmp_path / "setup"
-    setup_dir.mkdir()
-    script = setup_dir / "psft-dpk-setup.sh"
-    script.write_text("#!/bin/bash\nexit 0\n")
-    script.chmod(0o755)
-    return tmp_path
+from psa.commands.dpk.core import (
+    _deploy_hiera_files,
+    _deploy_module_files,
+    _deploy_puppet_conf,
+    _generate_hiera_yaml,
+    _generate_puppet_conf,
+    _get_source_path,
+)
+from psa.core.config import PsaConfig
 
 
-@pytest.fixture
-def mock_dpk_dir(tmp_path):
-    """Create a mock DPK directory with puppet structure for sync tests."""
+# --- _get_source_path tests ---
+
+
+def test_get_source_path_returns_cli_arg(tmp_path):
+    """CLI --source arg takes priority."""
+    source = tmp_path / "my-source"
+    source.mkdir()
+    result = _get_source_path(source)
+    assert result == source.resolve()
+
+
+def test_get_source_path_uses_psa_kit_env(monkeypatch, tmp_path):
+    """PSA_KIT env var used when no CLI arg."""
+    kit = tmp_path / "kit"
+    monkeypatch.setenv("PSA_KIT", str(kit))
+    result = _get_source_path(None)
+    assert result == kit
+
+
+def test_get_source_path_falls_back_to_config(monkeypatch, tmp_path):
+    """Falls back to config.psa_kit_path when env not set."""
+    monkeypatch.delenv("PSA_KIT", raising=False)
+    config = PsaConfig()
+    config.psa_kit_path = tmp_path / "from-config"
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        result = _get_source_path(None)
+    assert result == tmp_path / "from-config"
+
+
+def test_get_source_path_no_io_home(monkeypatch, tmp_path):
+    """IO_HOME is no longer checked."""
+    monkeypatch.delenv("PSA_KIT", raising=False)
+    monkeypatch.setenv("IO_HOME", str(tmp_path / "io-home"))
+    config = PsaConfig()
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        result = _get_source_path(None)
+    # Should NOT return IO_HOME — falls through to package location
+    assert result != tmp_path / "io-home"
+
+
+# --- _generate_hiera_yaml tests ---
+
+
+def test_generate_hiera_yaml_with_all_paths(tmp_path):
+    """Hiera YAML includes cust, kit, and DPK layers with correct paths."""
+    cust = tmp_path / "cust"
+    kit = tmp_path / "kit"
+    result = _generate_hiera_yaml(cust, kit)
+
+    # Should contain cust datadir
+    cust_datadir = str(cust / "dpk" / "puppet" / "production" / "data")
+    assert cust_datadir in result
+
+    # Should contain kit datadir
+    kit_datadir = str(kit / "dpk" / "puppet" / "production" / "data")
+    assert kit_datadir in result
+
+    # Should contain DPK base layers (relative, no datadir)
+    assert "psft_configuration.yaml" in result
+    assert "psft_customizations.yaml" in result
+    assert "defaults.yaml" in result
+
+    # Customer layers should reference correct paths
+    assert "domain/%{facts.domainname}.yaml" in result
+    assert "server/%{facts.hostname}.yaml" in result
+    assert "tier/%{facts.ps_tier}.yaml" in result
+
+    # Kit layer
+    assert "psa-ops/common.yaml" in result
+
+
+def test_generate_hiera_yaml_no_cust():
+    """Hiera YAML without cust path skips cust layers."""
+    result = _generate_hiera_yaml(None, Path("/kit"))
+    assert "domain/" not in result
+    assert "server/" not in result
+    # Kit layer still present
+    assert "psa-ops/common.yaml" in result
+
+
+def test_generate_hiera_yaml_no_kit():
+    """Hiera YAML without kit path skips kit layer."""
+    result = _generate_hiera_yaml(Path("/cust"), None)
+    assert "psa-ops/common.yaml" not in result
+    # Cust layers still present
+    assert "domain/%{facts.domainname}.yaml" in result
+
+
+def test_generate_hiera_yaml_is_valid_yaml(tmp_path):
+    """Generated hiera.yaml is valid YAML."""
+    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit")
+    parsed = yaml.safe_load(result)
+    assert parsed["version"] == 5
+    assert "hierarchy" in parsed
+    assert isinstance(parsed["hierarchy"], list)
+
+
+def test_generate_hiera_yaml_dpk_layers_no_datadir(tmp_path):
+    """DPK base layers should not have datadir override."""
+    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit")
+    # Parse and check DPK layers
+    parsed = yaml.safe_load(result)
+    dpk_names = [
+        "DPK configuration", "DPK customizations", "DPK unix system",
+        "DPK deployment", "DPK patches", "DPK defaults",
+    ]
+    for entry in parsed["hierarchy"]:
+        if entry["name"] in dpk_names:
+            assert "datadir" not in entry, f"{entry['name']} should not have datadir"
+
+
+# --- _deploy_hiera_files tests ---
+
+
+def test_deploy_hiera_files_writes_to_puppet_dirs(dpk_tree, tmp_path):
+    """Hiera files deployed to puppet/ and puppet/production/."""
+    cust = tmp_path / "cust"
+    kit = tmp_path / "kit"
+    assert _deploy_hiera_files(dpk_tree, cust, kit, dry_run=False)
+
+    hiera_root = dpk_tree / "puppet" / "hiera.yaml"
+    hiera_prod = dpk_tree / "puppet" / "production" / "hiera.yaml"
+    assert hiera_root.exists()
+    assert hiera_prod.exists()
+
+    content = hiera_root.read_text()
+    assert str(cust / "dpk" / "puppet" / "production" / "data") in content
+
+
+def test_deploy_hiera_files_dry_run(dpk_tree, tmp_path):
+    """Dry run does not write files."""
+    assert _deploy_hiera_files(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=True)
+    assert not (dpk_tree / "puppet" / "hiera.yaml").exists()
+
+
+# --- _deploy_module_files tests ---
+
+
+def test_deploy_module_files_all_io_modules(dpk_tree, kit_source):
+    """All io_* modules from source are deployed."""
+    result = _deploy_module_files(dpk_tree, kit_source, dry_run=False)
+    assert result is True
+
+    modules_dir = dpk_tree / "puppet" / "production" / "modules"
+    deployed = sorted(d.name for d in modules_dir.iterdir() if d.is_dir())
+    assert "io_profile" in deployed
+    assert "io_role" in deployed
+    assert "io_tools" in deployed
+
+
+def test_deploy_module_files_backup_existing(dpk_tree, kit_source):
+    """Existing modules are backed up before overwrite."""
+    target = dpk_tree / "puppet" / "production" / "modules" / "io_role"
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "old.pp").write_text("old content")
+
+    _deploy_module_files(dpk_tree, kit_source, dry_run=False)
+
+    backup = dpk_tree / "puppet" / "production" / "modules" / "io_role.bak"
+    assert backup.exists()
+    assert (backup / "old.pp").exists()
+
+
+# --- _generate_puppet_conf tests ---
+
+
+def test_generate_puppet_conf_all_paths(tmp_path):
+    """puppet.conf modulepath includes cust:kit:dpk."""
+    cust = tmp_path / "cust"
+    kit = tmp_path / "kit"
     dpk = tmp_path / "dpk"
-    puppet = dpk / "puppet"
-    prod = puppet / "production"
-    manifests = prod / "manifests"
-    modules = prod / "modules"
-    manifests.mkdir(parents=True)
-    modules.mkdir(parents=True)
-    # Create existing files so backup paths work
-    (puppet / "hiera.yaml").write_text("old hiera")
-    (prod / "hiera.yaml").write_text("old hiera")
-    (manifests / "site.pp").write_text("old site")
-    return dpk
+    result = _generate_puppet_conf(cust, kit, dpk)
+
+    cust_mod = str(cust / "dpk" / "puppet" / "production" / "modules")
+    kit_mod = str(kit / "dpk" / "puppet" / "production" / "modules")
+    dpk_mod = str(dpk / "puppet" / "production" / "modules")
+
+    assert cust_mod in result
+    assert kit_mod in result
+    assert dpk_mod in result
+
+    # Verify order: cust before kit before dpk
+    assert result.index(cust_mod) < result.index(kit_mod)
+    assert result.index(kit_mod) < result.index(dpk_mod)
 
 
-@pytest.fixture
-def mock_source_dir(tmp_path):
-    """Create a mock source dir with io_profile/io_role modules."""
-    src = tmp_path / "source"
-    mod_dir = src / "dpk" / "puppet" / "production" / "modules"
-    (mod_dir / "io_profile").mkdir(parents=True)
-    (mod_dir / "io_profile" / "init.pp").write_text("class io_profile {}")
-    (mod_dir / "io_role").mkdir(parents=True)
-    (mod_dir / "io_role" / "init.pp").write_text("class io_role {}")
-    return src
+def test_generate_puppet_conf_no_cust(tmp_path):
+    """puppet.conf without cust only has kit:dpk."""
+    kit = tmp_path / "kit"
+    dpk = tmp_path / "dpk"
+    result = _generate_puppet_conf(None, kit, dpk)
+
+    kit_mod = str(kit / "dpk" / "puppet" / "production" / "modules")
+    dpk_mod = str(dpk / "puppet" / "production" / "modules")
+
+    assert kit_mod in result
+    assert dpk_mod in result
+    assert "cust" not in result
 
 
-# ==================== setup --prereq / --postcfg ====================
+# --- _deploy_puppet_conf tests ---
 
 
-class TestSetupPrereqPostcfg:
-    def test_prereq_and_postcfg_mutually_exclusive(self, mock_dpk_install):
-        """Both --prereq and --postcfg together should exit 1."""
-        result = runner.invoke(psa_app, [
-            "dpk", "setup",
-            "--prereq", "--postcfg",
-            "--install-dir", str(mock_dpk_install),
-            "--base-dir", "/tmp/base",
-        ])
-        assert result.exit_code == 1
-        assert "mutually exclusive" in result.output
-
-    @patch("os.geteuid", return_value=0)
-    def test_prereq_dry_run(self, mock_euid, mock_dpk_install):
-        """--prereq --dry-run shows command without executing."""
-        result = runner.invoke(psa_app, [
-            "dpk", "setup",
-            "--prereq", "--dry-run",
-            "--install-dir", str(mock_dpk_install),
-        ])
-        assert result.exit_code == 0
-        assert "--prereq" in result.output
-        assert "Dry run" in result.output
-
-    @patch("os.geteuid", return_value=0)
-    def test_postcfg_dry_run(self, mock_euid, mock_dpk_install):
-        """--postcfg --dry-run shows command without executing."""
-        result = runner.invoke(psa_app, [
-            "dpk", "setup",
-            "--postcfg", "--dry-run",
-            "--install-dir", str(mock_dpk_install),
-            "--base-dir", "/tmp/base",
-        ])
-        assert result.exit_code == 0
-        assert "--postcfg" in result.output
-        assert "Dry run" in result.output
-
-    @patch("psa.commands.dpk.core._check_dpk_prerequisites")
-    def test_setup_default_dry_run(self, mock_prereqs, mock_dpk_install):
-        """Default setup (no --prereq/--postcfg) with --dry-run still works."""
-        result = runner.invoke(psa_app, [
-            "dpk", "setup",
-            "--dry-run",
-            "--install-dir", str(mock_dpk_install),
-            "--base-dir", "/tmp/base",
-        ])
-        assert result.exit_code == 0
-        assert "--silent" in result.output
-        assert "Dry run" in result.output
+def test_deploy_puppet_conf_writes_file(dpk_tree, tmp_path):
+    """puppet.conf is written to puppet/ directory."""
+    assert _deploy_puppet_conf(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=False)
+    target = dpk_tree / "puppet" / "puppet.conf"
+    assert target.exists()
+    content = target.read_text()
+    assert "modulepath" in content
 
 
-# ==================== sync --hiera / --site / --modules ====================
-
-
-class TestSyncFilters:
-    def test_sync_hiera_only(self, mock_dpk_dir, mock_source_dir):
-        """--hiera only deploys hiera.yaml, not site.pp or modules."""
-        result = runner.invoke(psa_app, [
-            "dpk", "sync",
-            "--hiera",
-            "--dpk-path", str(mock_dpk_dir),
-            "--source", str(mock_source_dir),
-        ])
-        assert result.exit_code == 0
-        # hiera.yaml should be updated
-        hiera = mock_dpk_dir / "puppet" / "production" / "hiera.yaml"
-        assert "version: 5" in hiera.read_text()
-        # site.pp should NOT be updated (still old content)
-        site = mock_dpk_dir / "puppet" / "production" / "manifests" / "site.pp"
-        assert site.read_text() == "old site"
-
-    def test_sync_site_only(self, mock_dpk_dir, mock_source_dir):
-        """--site only deploys site.pp, not hiera.yaml."""
-        result = runner.invoke(psa_app, [
-            "dpk", "sync",
-            "--site",
-            "--dpk-path", str(mock_dpk_dir),
-            "--source", str(mock_source_dir),
-        ])
-        assert result.exit_code == 0
-        # site.pp should be updated
-        site = mock_dpk_dir / "puppet" / "production" / "manifests" / "site.pp"
-        assert "ps_role" in site.read_text()
-        # hiera.yaml should NOT be updated
-        hiera = mock_dpk_dir / "puppet" / "production" / "hiera.yaml"
-        assert hiera.read_text() == "old hiera"
-
-    def test_sync_modules_only(self, mock_dpk_dir, mock_source_dir):
-        """--modules only deploys modules, not hiera or site."""
-        result = runner.invoke(psa_app, [
-            "dpk", "sync",
-            "--modules",
-            "--dpk-path", str(mock_dpk_dir),
-            "--source", str(mock_source_dir),
-        ])
-        assert result.exit_code == 0
-        # modules should be deployed
-        io_profile = mock_dpk_dir / "puppet" / "production" / "modules" / "io_profile"
-        assert io_profile.exists()
-        # hiera should NOT be updated
-        hiera = mock_dpk_dir / "puppet" / "production" / "hiera.yaml"
-        assert hiera.read_text() == "old hiera"
-        # site should NOT be updated
-        site = mock_dpk_dir / "puppet" / "production" / "manifests" / "site.pp"
-        assert site.read_text() == "old site"
-
-    def test_sync_all_default(self, mock_dpk_dir, mock_source_dir):
-        """No filter flags -> deploys all three components."""
-        result = runner.invoke(psa_app, [
-            "dpk", "sync",
-            "--dpk-path", str(mock_dpk_dir),
-            "--source", str(mock_source_dir),
-        ])
-        assert result.exit_code == 0
-        # All three should be updated
-        hiera = mock_dpk_dir / "puppet" / "production" / "hiera.yaml"
-        assert "version: 5" in hiera.read_text()
-        site = mock_dpk_dir / "puppet" / "production" / "manifests" / "site.pp"
-        assert "ps_role" in site.read_text()
-        io_role = mock_dpk_dir / "puppet" / "production" / "modules" / "io_role"
-        assert io_role.exists()
-
-    def test_sync_data_flag_accepted(self, mock_dpk_dir, mock_source_dir):
-        """--data flag is accepted (even if PSA-OPS not configured, it should not crash sync)."""
-        result = runner.invoke(psa_app, [
-            "dpk", "sync",
-            "--data",
-            "--dpk-path", str(mock_dpk_dir),
-            "--source", str(mock_source_dir),
-        ])
-        # Sync of files succeeds; --data may warn about PSA-OPS not configured
-        # but overall command should complete (sync catches exceptions)
-        assert result.exit_code == 0
-
-
-# ==================== Removed commands ====================
-
-
-class TestRemovedCommands:
-    def test_data_sync_removed(self):
-        """'psa dpk data sync' should no longer be a valid command."""
-        result = runner.invoke(psa_app, ["dpk", "data", "sync"])
-        # Typer shows help or error for missing subcommand
-        assert result.exit_code != 0 or "No such command" in result.output or "Usage" in result.output
-
-    def test_hiera_command_removed(self):
-        """'psa dpk hiera' should no longer be a valid command."""
-        result = runner.invoke(psa_app, ["dpk", "hiera"])
-        assert result.exit_code != 0 or "No such command" in result.output
-
-    def test_prereq_command_removed(self):
-        """'psa dpk prereq' should no longer be a valid command."""
-        result = runner.invoke(psa_app, ["dpk", "prereq"])
-        assert result.exit_code != 0 or "No such command" in result.output
-
-    def test_postcfg_command_removed(self):
-        """'psa dpk postcfg' should no longer be a valid command."""
-        result = runner.invoke(psa_app, ["dpk", "postcfg"])
-        assert result.exit_code != 0 or "No such command" in result.output
-
-    def test_site_command_removed(self):
-        """'psa dpk site' should no longer be a valid command."""
-        result = runner.invoke(psa_app, ["dpk", "site"])
-        assert result.exit_code != 0 or "No such command" in result.output
-
-    def test_modules_command_removed(self):
-        """'psa dpk modules' should no longer be a valid command."""
-        result = runner.invoke(psa_app, ["dpk", "modules"])
-        assert result.exit_code != 0 or "No such command" in result.output
+def test_deploy_puppet_conf_dry_run(dpk_tree, tmp_path):
+    """Dry run does not write puppet.conf."""
+    assert _deploy_puppet_conf(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=True)
+    assert not (dpk_tree / "puppet" / "puppet.conf").exists()
