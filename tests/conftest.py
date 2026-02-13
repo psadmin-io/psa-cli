@@ -22,6 +22,20 @@ Port=9100
 Address=//0.0.0.0:9100
 """
 
+# Older Archive version with different port
+SAMPLE_PSAPPSRV_CFG_OLD = """\
+[Startup]
+DBName=HCMPRD
+DBType=ORACLE
+
+[Domain Settings]
+Domain ID=HCMPRD_app
+
+[JOLT Listener]
+Port=9000
+Address=//0.0.0.0:9000
+"""
+
 SAMPLE_PSPRCS_CFG = """\
 [Startup]
 DBName=HCMPRD
@@ -45,6 +59,13 @@ def tmp_cfg_home(tmp_path):
     app_dir = cfg_home / "appserv" / "TESTDOM"
     app_dir.mkdir(parents=True)
     (app_dir / "psappsrv.cfg").write_text(SAMPLE_PSAPPSRV_CFG)
+
+    # Archive dir with timestamped backups
+    archive_dir = app_dir / "Archive"
+    archive_dir.mkdir()
+    (archive_dir / "psappsrv.cfg").write_text(SAMPLE_PSAPPSRV_CFG)  # plain copy (no timestamp)
+    (archive_dir / "psappsrv_012526_1430_22.cfg").write_text(SAMPLE_PSAPPSRV_CFG_OLD)  # older
+    (archive_dir / "psappsrv_020126_0900_00.cfg").write_text(SAMPLE_PSAPPSRV_CFG_OLD)  # newer
 
     prcs_dir = cfg_home / "appserv" / "prcs" / "TESTPRCS"
     prcs_dir.mkdir(parents=True)

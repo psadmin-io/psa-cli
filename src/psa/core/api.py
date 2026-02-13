@@ -231,6 +231,15 @@ class ApiClient:
         except urllib.error.URLError as e:
             raise ApiError(f"Connection failed: {e.reason}")
 
+    def resolve_environment(self, name: str) -> Optional[dict]:
+        """Resolve environment name to API record. Case-insensitive."""
+        envs = self.list_environments()
+        name_lower = name.lower()
+        for env in envs:
+            if env.get("name", "").lower() == name_lower:
+                return env
+        return None
+
     def list_domains(
         self,
         name: Optional[str] = None,
@@ -276,6 +285,14 @@ class ApiClient:
             query_parts.append(("config_type", config_type))
         qs = urllib.parse.urlencode(query_parts)
         return self._request("GET", f"/api/v1/configs/compare?{qs}")
+
+    def get_latest_config(self, domain_id: str, config_type: str) -> Optional[dict]:
+        """Fetch latest config version for a domain."""
+        configs = self._request(
+            "GET", f"/api/v1/domains/{domain_id}/configs",
+            params={"config_type": config_type, "limit": "1"},
+        )
+        return configs[0] if configs else None
 
     def get_domain_drift(
         self,
