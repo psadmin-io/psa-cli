@@ -1,6 +1,7 @@
 """Tests for psa domain compare command and compare module."""
 
 import json
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +13,7 @@ from psa.core.compare import (
     ArchiveFile,
     diff_configs,
     extract_api_properties,
+    format_age,
     get_primary_config,
     list_archive_backups,
     parse_config_to_flat,
@@ -25,6 +27,47 @@ runner = CliRunner()
 # ---------------------------------------------------------------------------
 # Unit tests: compare module
 # ---------------------------------------------------------------------------
+
+class TestFormatAge:
+    def test_minutes(self):
+        now = datetime(2026, 2, 1, 12, 0, 0)
+        dt = now - timedelta(minutes=30)
+        assert format_age(dt, now=now) == "30m ago"
+
+    def test_zero_minutes(self):
+        now = datetime(2026, 2, 1, 12, 0, 0)
+        assert format_age(now, now=now) == "0m ago"
+
+    def test_just_under_one_hour(self):
+        now = datetime(2026, 2, 1, 12, 0, 0)
+        dt = now - timedelta(minutes=59)
+        assert format_age(dt, now=now) == "59m ago"
+
+    def test_one_hour(self):
+        now = datetime(2026, 2, 1, 12, 0, 0)
+        dt = now - timedelta(hours=1)
+        assert format_age(dt, now=now) == "1h ago"
+
+    def test_hours(self):
+        now = datetime(2026, 2, 1, 12, 0, 0)
+        dt = now - timedelta(hours=5)
+        assert format_age(dt, now=now) == "5h ago"
+
+    def test_just_under_one_day(self):
+        now = datetime(2026, 2, 1, 12, 0, 0)
+        dt = now - timedelta(hours=23)
+        assert format_age(dt, now=now) == "23h ago"
+
+    def test_one_day(self):
+        now = datetime(2026, 2, 1, 12, 0, 0)
+        dt = now - timedelta(days=1)
+        assert format_age(dt, now=now) == "1d ago"
+
+    def test_many_days(self):
+        now = datetime(2026, 2, 1, 12, 0, 0)
+        dt = now - timedelta(days=7)
+        assert format_age(dt, now=now) == "7d ago"
+
 
 class TestGetPrimaryConfig:
     def test_app(self):
@@ -48,6 +91,9 @@ class TestListArchiveBackups:
         # 020126 (Feb 1, 2026) is newer than 012526 (Jan 25, 2026)
         assert "020126" in result[0].name
         assert "012526" in result[1].name
+        # parsed_dt should be populated
+        assert result[0].parsed_dt == datetime(2026, 2, 1, 9, 0, 0)
+        assert result[1].parsed_dt == datetime(2026, 1, 25, 14, 30, 22)
 
     def test_ignores_plain_copy(self, tmp_cfg_home):
         """Archive/psappsrv.cfg (no timestamp) should not be included."""
@@ -428,6 +474,7 @@ class TestCompareInteractivePicker:
         assert result.exit_code == 0
         assert "Archive backups for psappsrv.cfg" in result.output
         assert "1." in result.output
+        assert "ago)" in result.output
         assert "Select" in result.output
 
     @patch("psa.commands.domain.SudoFileOps")
