@@ -3,17 +3,15 @@
 from typing import Optional
 
 import typer
-from rich.console import Console
 
 from psa import __version__
 from psa.commands import config, domain, dpk, ops
-
-console = Console()
+from psa.core.output import Verbosity, console, set_verbosity
 
 # Main application
 app = typer.Typer(
     name="psa",
-    help="PeopleSoft Administration Tools",
+    help="[bold]PSA-CLI[/bold]\n\nA PeopleSoft Administration Tool from psadmin.io",
     no_args_is_help=True,
     rich_markup_mode="rich",
     add_completion=False,
@@ -41,11 +39,15 @@ def main(
         "-V",
         callback=version_callback,
         is_eager=True,
-        help="Show version and exit.",
+        help="Show version and exit",
     ),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
-    """A unified CLI for managing PeopleSoft domains and DPK deployments."""
-    pass
+    if quiet:
+        set_verbosity(Verbosity.QUIET)
+    elif verbose:
+        set_verbosity(Verbosity.VERBOSE)
 
 
 if __name__ == "__main__":

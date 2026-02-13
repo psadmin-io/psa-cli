@@ -8,7 +8,7 @@ from rich.table import Table
 
 from psa.core.config import CONFIG_PATH, get_config
 from psa.core.discovery import run_discovery
-from psa.core.domain_cache import update_cache_from_ingest
+from psa.core.domain_cache import get_cached_domain_id, update_cache_from_ingest
 from psa.core.output import print_error, print_json, print_success
 from psa.core.api import ApiClient, ApiError, get_hostname, get_ip_address
 
@@ -16,14 +16,14 @@ console = Console()
 
 app = typer.Typer(
     name="ops",
-    help="Manage PSA-OPS configuration",
+    help="Manage PSA-OPS API connections and data",
     no_args_is_help=True,
 )
 
 
 @app.command(name="environments")
 def list_environments() -> None:
-    """List environments from PSA-OPS."""
+    """List environments from PSA-OPS"""
     config = get_config()
 
     if not config.ops.is_configured():
@@ -71,7 +71,7 @@ def list_environments() -> None:
 
 @app.command(name="nodes")
 def list_nodes() -> None:
-    """List nodes from PSA-OPS."""
+    """List nodes from PSA-OPS"""
     config = get_config()
 
     if not config.ops.is_configured():
@@ -133,7 +133,7 @@ def register(
         help="Node role: app, web, prcs, mid, webapp",
     ),
 ) -> None:
-    """Register this node with PSA-OPS."""
+    """Register this node with PSA-OPS"""
     config = get_config()
     hostname = get_hostname()
 
@@ -214,12 +214,6 @@ def report(
         "-j",
         help="Output as JSON",
     ),
-    verbose: bool = typer.Option(
-        False,
-        "--verbose",
-        "-v",
-        help="Show verbose output including config details",
-    ),
     ps_cfg_home: Optional[str] = typer.Option(
         None,
         "--ps-cfg-home",
@@ -235,7 +229,7 @@ def report(
     ),
 ) -> None:
     """
-    Discover domains and sync to PSA-OPS.
+    Discover domains and sync to PSA-OPS
 
     Scans local domains and pushes results to the configured
     PSA-OPS. Requires PSA-OPS to be configured via 'psa config setup'.
@@ -243,7 +237,6 @@ def report(
     Examples:
         psa ops report
         psa ops report --type app
-        psa ops report --verbose
     """
     config = get_config()
     hostname = get_hostname()
@@ -309,7 +302,7 @@ def report(
 
 @app.command(name="status")
 def status() -> None:
-    """Show PSA-OPS connection status."""
+    """Show PSA-OPS connection status"""
     config = get_config()
 
     console.print("[bold]PSA-OPS Configuration[/bold]\n")
@@ -345,3 +338,63 @@ def status() -> None:
                 console.print("[yellow]![/yellow] Node not found in PSA-OPS")
     except ApiError as e:
         console.print(f"[red]\u2717[/red] Connection failed: {e}")
+
+
+def _resolve_api_domain_id(client: ApiClient, name: str, node_id: Optional[str] = None, domain_type: Optional[str] = None) -> str:
+    """Resolve domain name to UUID via cache then PSA-OPS API."""
+    cached = get_cached_domain_id(name)
+    if cached:
+        return cached
+    domains = client.list_domains(name=name, node_id=node_id)
+    if domain_type:
+        domains = [d for d in domains if d.get("domain_type") == domain_type]
+    if not domains:
+        print_error(f"Domain '{name}' not found in PSA-OPS")
+        raise typer.Exit(1)
+    return domains[0]["id"]
+
+
+@app.command(name="set-env")
+def set_env(
+    name: str = typer.Argument(..., help="Domain name (e.g. APPDOM)"),
+    environment: str = typer.Argument(..., help="Environment name (e.g. dev, prod)"),
+    domain_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Domain type filter for disambiguation (app, prcs, pia)",
+    ),
+) -> None:
+    """
+    Assign an environment to a domain in PSA-OPS
+
+    Resolves domain and environment by name (no UUIDs needed).
+    Domain is scoped to the current node.
+
+    Examples:
+        psa ops set-env APPDOM dev
+        psa ops set-env APPDOM dev --type app
+    """
+    config = get_config()
+
+    if not config.ops.is_configured():
+        print_error("PSA-OPS not configured. Run 'psa config setup' first")
+        raise typer.Exit(1)
+
+    client = ApiClient(config.ops.url)
+
+    # Resolve domain name -> UUID (scoped to this node)
+    domain_id = _resolve_api_domain_id(client, name, node_id=config.ops.node_id, domain_type=domain_type)
+
+    # Resolve environment name -> UUID
+    env = client.resolve_environment(environment)
+    if not env:
+        print_error(f"Environment '{environment}' not found in PSA-OPS")
+        raise typer.Exit(1)
+
+    try:
+        result = client.update_domain(domain_id, environment_id=env["id"])
+        print_success(f"Domain {result.get('name', name)} assigned to environment '{environment}'")
+    except ApiError as e:
+        print_error(f"Failed to assign environment: {e}")
+        raise typer.Exit(1)

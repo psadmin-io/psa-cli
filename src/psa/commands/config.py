@@ -88,9 +88,59 @@ def config_init(
         console.print(f"[green]✓[/green] Role: {config.ops.ps_role}")
 
 
+SETTABLE_KEYS = {
+    "skip_domain_confirm": ("bool", "Skip confirmation prompt for all-domain commands"),
+    "parallel_boot": ("bool", "Use parallelboot instead of boot"),
+    "sudo_enabled": ("bool", "Use sudo to run commands as runtime_user"),
+    "runtime_user": ("str", "OS user for domain commands"),
+}
+
+
+def _parse_bool(value: str) -> bool:
+    if value.lower() in ("true", "1", "yes", "on"):
+        return True
+    if value.lower() in ("false", "0", "no", "off"):
+        return False
+    raise ValueError(f"Invalid boolean: {value}")
+
+
+@app.command(name="set")
+def config_set(
+    key: str = typer.Argument(..., help="Config key to set"),
+    value: str = typer.Argument(..., help="Value to set"),
+) -> None:
+    """
+    Set a config value.
+
+    Examples:
+        psa config set skip_domain_confirm true
+        psa config set parallel_boot true
+        psa config set runtime_user psadm3
+    """
+    if key not in SETTABLE_KEYS:
+        print_error(f"Unknown key: {key}")
+        console.print(f"[dim]Settable keys: {', '.join(sorted(SETTABLE_KEYS))}[/dim]")
+        raise typer.Exit(1)
+
+    val_type, _ = SETTABLE_KEYS[key]
+    config = PsaConfig.load()
+
+    try:
+        if val_type == "bool":
+            setattr(config, key, _parse_bool(value))
+        else:
+            setattr(config, key, value)
+    except ValueError as e:
+        print_error(str(e))
+        raise typer.Exit(1)
+
+    config.save()
+    console.print(f"[green]✓[/green] {key} = {getattr(config, key)}")
+
+
 @app.command(name="show")
 def config_show() -> None:
-    """Show current configuration."""
+    """Show current configuration"""
     config = PsaConfig.load()
 
     console.print("[bold]psa Configuration[/bold]\n")
@@ -164,7 +214,7 @@ def config_compare(
     ),
 ) -> None:
     """
-    Compare config across domains.
+    Compare config across domains
 
     Fetches config comparison from PSA-OPS for 2+ domains and displays
     differences. By default only shows 'different' and 'missing' rows.

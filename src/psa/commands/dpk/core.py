@@ -184,7 +184,7 @@ def stage(
     ),
 ) -> None:
     """
-    Stage DPK files: copy zips from repo and extract first archive.
+    Stage DPK files: copy zips from repo and extract first archive
 
     Copies all DPK zip files from the repo directory to the install directory,
     then extracts only the first zip (which contains the setup scripts).
@@ -331,7 +331,7 @@ def setup(
     ),
 ) -> None:
     """
-    Install DPK software (PS_HOME and middleware).
+    Install DPK software (PS_HOME and middleware)
 
     Installs PeopleTools and middleware (Tuxedo, WebLogic, DB client) without
     configuring domains. Use 'psa dpk apply' to deploy domains after setup.
@@ -458,7 +458,7 @@ def prereq(
     ),
 ) -> None:
     """
-    Run DPK prerequisite check (root only).
+    Run DPK prerequisite check (root only)
 
     Must be run by root before non-root user can run setup.
     Validates Oracle central inventory and permissions.
@@ -521,7 +521,7 @@ def postcfg(
     ),
 ) -> None:
     """
-    Run DPK post-configuration (root only).
+    Run DPK post-configuration (root only)
 
     Must be run by root after non-root user completes setup.
     Completes Oracle Database Client setup for mid-tier deployments.
@@ -590,7 +590,7 @@ def cleanup(
     ),
 ) -> None:
     """
-    Clean up DPK installation.
+    Clean up DPK installation
 
     Runs the DPK cleanup script to remove installed software and components.
     Wrapper for: ./psft-dpk-setup.sh --cleanup --psft_base_dir <path>
@@ -645,7 +645,7 @@ def cleanup(
 @app.command("status")
 def status() -> None:
     """
-    Check DPK installation status.
+    Check DPK installation status
 
     Verifies:
     - Puppet is installed and accessible
@@ -748,15 +748,9 @@ def apply(
         "--dpk-path",
         help=f"Path to DPK installation (or ${ENV_DPK_BASE})",
     ),
-    quiet: bool = typer.Option(
-        False,
-        "--quiet",
-        "-q",
-        help="Suppress config default warnings",
-    ),
 ) -> None:
     """
-    Apply DPK configuration.
+    Apply DPK configuration
 
     Applies Puppet manifests to configure PeopleSoft domains.
     Requires DPK to be set up first.
@@ -846,8 +840,8 @@ def apply(
         role = ops.ps_role
         defaulted.append(f"role={role}")
 
-    # Show warning for defaulted values
-    if defaulted and not quiet and not ops.suppress_fact_warnings:
+    # Show warning for defaulted values (print_warning is verbosity-aware)
+    if defaulted and not ops.suppress_fact_warnings:
         print_warning(f"Using config defaults: {', '.join(defaulted)}")
 
     # Build Facter environment variables
@@ -1009,7 +1003,7 @@ def hiera(
     ),
 ) -> None:
     """
-    Install custom hiera.yaml for tier/environment lookups.
+    Install custom hiera.yaml for tier/environment lookups
 
     Copies hiera.yaml to both puppet/ and puppet/production/ directories,
     backing up existing files with .bak suffix.
@@ -1078,7 +1072,7 @@ def site(
     ),
 ) -> None:
     """
-    Install custom site.pp for role-based node classification.
+    Install custom site.pp for role-based node classification
 
     Copies site.pp to puppet/production/manifests/, backing up existing
     file with .bak suffix. Uses ps_role fact to select io_role class.
@@ -1134,7 +1128,7 @@ def modules(
     ),
 ) -> None:
     """
-    Deploy custom DPK modules (io_profile, io_role).
+    Deploy custom DPK modules (io_profile, io_role)
 
     Copies io_profile and io_role modules to puppet/production/modules/,
     backing up existing directories with .bak suffix.
@@ -1353,7 +1347,7 @@ def sync(
     ),
 ) -> None:
     """
-    Sync custom DPK files to local installation.
+    Sync custom DPK files to local installation
 
     Deploys hiera.yaml, site.pp, and io_profile/io_role modules in one command.
     Optionally syncs Hiera data from PSA-OPS with --ops flag.
@@ -1421,7 +1415,6 @@ def sync(
                 environments=environments,
                 hiera_path=hiera_path,
                 dry_run=dry_run,
-                quiet=True,
             )
         except Exception as e:
             print_warning(f"PSA-OPS sync failed: {e}")

@@ -21,7 +21,7 @@ def get(
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file (or stdout)"),
 ):
     """
-    Get single YAML from PSA-OPS.
+    Get single YAML from PSA-OPS
 
     Examples:
         psa dpk data get tier DEV
@@ -68,7 +68,7 @@ def import_data(
     no_replace: bool = typer.Option(False, "--no-replace", help="Don't delete existing values (merge mode)"),
 ):
     """
-    Import YAML file into PSA-OPS.
+    Import YAML file into PSA-OPS
 
     Parses YAML and upserts config values to PSA-OPS database.
     By default, replaces all existing config for the level+key.
@@ -135,10 +135,9 @@ def sync(
         help="Hiera cust/ directory path"
     ),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would sync without writing"),
-    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress config default warnings"),
 ):
     """
-    Sync Hiera YAMLs from PSA-OPS to local Hiera paths.
+    Sync Hiera YAMLs from PSA-OPS to local Hiera paths
 
     Pulls tier and environment YAMLs from PSA-OPS and writes to:
     - {hiera_path}/tier/{tier}.yaml
@@ -167,8 +166,8 @@ def sync(
         environments = ops.environment_name
         defaulted.append(f"environments={environments}")
 
-    # Show warning for defaulted values
-    if defaulted and not quiet and not ops.suppress_fact_warnings:
+    # Show warning for defaulted values (print_warning is verbosity-aware)
+    if defaulted and not ops.suppress_fact_warnings:
         print_warning(f"Using config defaults: {', '.join(defaulted)}")
 
     if not tier and not environments:

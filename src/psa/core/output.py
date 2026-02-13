@@ -3,13 +3,73 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from enum import IntEnum
+from typing import Any, Callable, Optional, TypeVar
 
 from rich.console import Console
 from rich.table import Table
 
+T = TypeVar("T")
+
 console = Console()
 error_console = Console(stderr=True)
+
+
+# --- Verbosity ---
+
+
+class Verbosity(IntEnum):
+    QUIET = 0
+    DEFAULT = 1
+    VERBOSE = 2
+
+
+_verbosity: Verbosity = Verbosity.DEFAULT
+
+
+def get_verbosity() -> Verbosity:
+    return _verbosity
+
+
+def set_verbosity(v: Verbosity) -> None:
+    global _verbosity
+    _verbosity = v
+
+
+# --- Step runner ---
+
+
+def run_step(label: str, func: Callable[[], T], warn_if: Optional[Callable[[T], bool]] = None) -> T:
+    """Run func with spinner, then print completion line.
+
+    If the result indicates failure and ``warn_if(result)`` returns True,
+    a yellow ``~`` warning icon is shown instead of the red ``✗``.
+    """
+    if _verbosity == Verbosity.QUIET:
+        return func()
+
+    with console.status(f"  {label}"):
+        result = func()
+
+    ok = not hasattr(result, "success") or result.success
+    warn = not ok and warn_if is not None and warn_if(result)
+    if ok:
+        mark = "[green]✓[/green]"
+    elif warn:
+        mark = "[yellow]~[/yellow]"
+    else:
+        mark = "[red]✗[/red]"
+    done_label = label.rstrip(". ")
+    console.print(f"  {mark} {done_label}")
+
+    if _verbosity >= Verbosity.VERBOSE and hasattr(result, "output") and result.output.strip():
+        for line in result.output.strip().splitlines():
+            console.print(f"    [dim]{line}[/dim]")
+
+    return result
+
+
+# --- Output helpers ---
 
 
 def print_json(data: Any) -> None:
@@ -18,23 +78,35 @@ def print_json(data: Any) -> None:
 
 
 def print_error(message: str) -> None:
-    """Print an error message to stderr."""
+    """Print an error message to stderr. Always prints."""
     error_console.print(f"[red]Error:[/red] {message}")
 
 
 def print_warning(message: str) -> None:
-    """Print a warning message."""
-    console.print(f"[yellow]Warning:[/yellow] {message}")
+    """Print a warning message. Silenced in QUIET."""
+    if _verbosity >= Verbosity.DEFAULT:
+        console.print(f"[yellow]Warning:[/yellow] {message}")
 
 
 def print_success(message: str) -> None:
-    """Print a success message."""
-    console.print(f"[green]{message}[/green]")
+    """Print a success message. Silenced in QUIET."""
+    if _verbosity >= Verbosity.DEFAULT:
+        console.print(f"[green]{message}[/green]")
 
 
 def print_info(message: str) -> None:
-    """Print an info message."""
-    console.print(f"[blue]{message}[/blue]")
+    """Print an info message. Silenced in QUIET."""
+    if _verbosity >= Verbosity.DEFAULT:
+        console.print(f"[blue]{message}[/blue]")
+
+
+def print_verbose(message: str) -> None:
+    """Print only in VERBOSE mode."""
+    if _verbosity >= Verbosity.VERBOSE:
+        console.print(f"[dim]{message}[/dim]")
+
+
+# --- Tables ---
 
 
 def create_table(title: str, columns: list[str]) -> Table:

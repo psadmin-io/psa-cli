@@ -19,7 +19,7 @@ def init(
         None,
         "--ops-url",
         "-r",
-        help="PSA-OPS URL (e.g., http://ops.psaops.local:8000). If omitted, runs in standalone mode.",
+        help="PSA-OPS URL (e.g., http://ops.psaops.local:8000). If omitted, runs in standalone mode",
     ),
     ps_cfg_home: Optional[str] = typer.Option(
         None,
@@ -52,7 +52,7 @@ def init(
     ),
 ) -> None:
     """
-    Initialize psa with PSA-OPS.
+    Initialize psa with PSA-OPS
 
     Standalone mode (no --ops-url):
         Configures local paths and discovers domains.
@@ -73,6 +73,43 @@ def init(
         _init_standalone_mode(config, ps_cfg_home, runtime_user, non_interactive)
 
 
+def _detect_ps_paths_from_runtime_user(config, console) -> None:
+    """Auto-detect PS paths from runtime user's environment via sudo."""
+    import subprocess
+
+    env_vars = ["PS_CFG_HOME", "PS_HOME", "PS_APP_HOME", "PS_CUST_HOME"]
+    cmd = " && ".join(f'echo "{v}=${v}"' for v in env_vars)
+    try:
+        result = subprocess.run(
+            ["sudo", "su", "-", config.runtime_user, "-c", cmd],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return
+        for line in result.stdout.splitlines():
+            if "=" not in line:
+                continue
+            key, val = line.split("=", 1)
+            val = val.strip()
+            if not val:
+                continue
+            path = Path(val)
+            if key == "PS_CFG_HOME" and not config.ps_cfg_home:
+                config.ps_cfg_home = path
+                console.print(f"[green]✓[/green] Detected PS_CFG_HOME: {val}")
+            elif key == "PS_HOME" and not config.ps_home:
+                config.ps_home = path
+                console.print(f"[green]✓[/green] Detected PS_HOME: {val}")
+            elif key == "PS_APP_HOME" and not config.ps_app_home:
+                config.ps_app_home = path
+                console.print(f"[green]✓[/green] Detected PS_APP_HOME: {val}")
+            elif key == "PS_CUST_HOME" and not config.ps_cust_home:
+                config.ps_cust_home = path
+                console.print(f"[green]✓[/green] Detected PS_CUST_HOME: {val}")
+    except Exception:
+        pass
+
+
 def _init_standalone_mode(
     config,
     ps_cfg_home: Optional[str],
@@ -91,7 +128,9 @@ def _init_standalone_mode(
         if default_path.exists():
             config.ps_cfg_home = default_path
             console.print(f"[green]✓[/green] Auto-detected PS_CFG_HOME: {default_path}")
-        elif not non_interactive:
+        elif config.sudo_enabled:
+            _detect_ps_paths_from_runtime_user(config, console)
+        if not config.ps_cfg_home and not non_interactive:
             path_input = Prompt.ask(
                 "PS_CFG_HOME path",
                 default=str(default_path),
