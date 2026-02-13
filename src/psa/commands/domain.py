@@ -94,10 +94,10 @@ def _resolve_targets(
     return domains
 
 
-def _confirm_targets(domains: List[DomainInfo], action: str, all_mode: bool = False) -> bool:
+def _confirm_targets(domains: List[DomainInfo], action: str, all_mode: bool = False, force: bool = False) -> bool:
     """Prompt user to confirm action on domains.
 
-    Auto-confirms for single named domain, QUIET mode, or skip_domain_confirm config.
+    Auto-confirms for single named domain, QUIET mode, --force flag, or skip_domain_confirm config.
     Always prompts in all-mode (no name specified), even if only 1 domain found.
     """
     if len(domains) == 1 and not all_mode:
@@ -105,7 +105,7 @@ def _confirm_targets(domains: List[DomainInfo], action: str, all_mode: bool = Fa
     if get_verbosity() == Verbosity.QUIET:
         return True
     config = get_config()
-    if config.skip_domain_confirm:
+    if config.skip_domain_confirm or force:
         return True
 
     table = Table(title=f"{action.capitalize()} targets")
@@ -114,7 +114,7 @@ def _confirm_targets(domains: List[DomainInfo], action: str, all_mode: bool = Fa
     for d in domains:
         table.add_row(d.name, d.domain_type)
     console.print(table)
-    console.print("[dim]Tip: psa config set skip_domain_confirm true to skip this prompt[/dim]")
+    console.print("[dim]Tip: use --force or `psa config set skip_domain_confirm true` to skip this prompt[/dim]")
 
     return typer.confirm(f"{action.capitalize()} {len(domains)} domain(s)?")
 
@@ -278,6 +278,7 @@ def bounce(
         "-t",
         help="Domain type (app, prcs, pia)",
     ),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
@@ -291,7 +292,7 @@ def bounce(
     """
     _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
-    if not _confirm_targets(domains, "bounce", all_mode=name is None):
+    if not _confirm_targets(domains, "bounce", all_mode=name is None, force=force):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -344,6 +345,7 @@ def configure(
         "-t",
         help="Domain type (app, prcs)",
     ),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
@@ -361,7 +363,7 @@ def configure(
     if name is not None and domains[0].domain_type == "pia":
         print_error("Configure not supported for PIA domains")
         raise typer.Exit(1)
-    if not _confirm_targets(domains, "configure", all_mode=name is None):
+    if not _confirm_targets(domains, "configure", all_mode=name is None, force=force):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -651,6 +653,7 @@ def flush(
         "-t",
         help="Domain type (app, prcs)",
     ),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
@@ -667,7 +670,7 @@ def flush(
     if name is not None and domains[0].domain_type == "pia":
         print_warning("Flush not applicable for PIA domains")
         return
-    if not _confirm_targets(domains, "flush", all_mode=name is None):
+    if not _confirm_targets(domains, "flush", all_mode=name is None, force=force):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -697,6 +700,7 @@ def kill(
         "-t",
         help="Domain type (app, prcs, pia)",
     ),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
@@ -710,7 +714,7 @@ def kill(
     """
     _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
-    if not _confirm_targets(domains, "kill", all_mode=name is None):
+    if not _confirm_targets(domains, "kill", all_mode=name is None, force=force):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -810,6 +814,7 @@ def purge(
         "-t",
         help="Domain type (app, prcs, pia)",
     ),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
@@ -823,7 +828,7 @@ def purge(
     """
     _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
-    if not _confirm_targets(domains, "purge", all_mode=name is None):
+    if not _confirm_targets(domains, "purge", all_mode=name is None, force=force):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -865,6 +870,7 @@ def restart(
         "-t",
         help="Domain type (app, prcs, pia)",
     ),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
@@ -878,7 +884,7 @@ def restart(
     """
     _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
-    if not _confirm_targets(domains, "restart", all_mode=name is None):
+    if not _confirm_targets(domains, "restart", all_mode=name is None, force=force):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -925,6 +931,7 @@ def start(
         "-t",
         help="Domain type (app, prcs, pia)",
     ),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
@@ -939,7 +946,7 @@ def start(
     """
     _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
-    if not _confirm_targets(domains, "start", all_mode=name is None):
+    if not _confirm_targets(domains, "start", all_mode=name is None, force=force):
         raise typer.Abort()
 
     executor = _get_executor()
@@ -1069,18 +1076,13 @@ def status(
 @app.command("stop")
 def stop(
     name: Optional[str] = typer.Argument(None, help="Domain name (omit for all)"),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        "-f",
-        help="Force stop (kill processes)",
-    ),
     domain_type: Optional[str] = typer.Option(
         None,
         "--type",
         "-t",
         help="Domain type (app, prcs, pia)",
     ),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
@@ -1089,24 +1091,22 @@ def stop(
 
     Examples:
         psa domain stop APPDOM
-        psa domain stop PRCSDOM --force
         psa domain stop              # stop all domains
         psa domain stop --type app   # stop all app domains
     """
     _apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
-    if not _confirm_targets(domains, "stop", all_mode=name is None):
+    if not _confirm_targets(domains, "stop", all_mode=name is None, force=force):
         raise typer.Abort()
 
     executor = _get_executor()
-    action = "kill" if force else "stop"
 
     failed = 0
     for domain in domains:
         print_info(f"Stopping {domain.domain_type} domain: {domain.name}")
         result = run_step(
             "Stopping",
-            lambda d=domain: _execute_domain_command(d, action, executor),
+            lambda d=domain: _execute_domain_command(d, "stop", executor),
             warn_if=lambda r, d=domain: _is_already_stopped(r, d),
         )
 
@@ -1115,7 +1115,7 @@ def stop(
         elif _is_already_stopped(result, domain):
             print_warning(f"Domain {domain.name} already stopped")
         else:
-            print_error(_format_command_error(action, domain.name, result))
+            print_error(_format_command_error("stop", domain.name, result))
             failed += 1
 
     if failed and len(domains) > 1:

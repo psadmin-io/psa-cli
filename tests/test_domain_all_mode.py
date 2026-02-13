@@ -204,7 +204,7 @@ class TestCommandLoops:
         mock_resolve.return_value = ALL_DOMAINS
         mock_get_ex.return_value = MagicMock()
 
-        stop(name=None, force=False, domain_type=None)
+        stop(name=None, domain_type=None)
 
         assert mock_exec.call_count == 3
 
@@ -302,7 +302,7 @@ class TestAlreadyStopped:
         mock_get_ex.return_value = MagicMock()
 
         # Should NOT raise — already stopped = warning, exit 0
-        stop(name="APPDOM", force=False, domain_type=None)
+        stop(name="APPDOM", domain_type=None)
 
     @patch("psa.commands.domain._confirm_targets", return_value=True)
     @patch("psa.commands.domain._resolve_targets")
@@ -315,7 +315,7 @@ class TestAlreadyStopped:
         mock_get_ex.return_value = MagicMock()
 
         with pytest.raises(click.exceptions.Exit):
-            stop(name="APPDOM", force=False, domain_type=None)
+            stop(name="APPDOM", domain_type=None)
 
     @patch("psa.commands.domain._confirm_targets", return_value=True)
     @patch("psa.commands.domain._resolve_targets")
@@ -343,7 +343,7 @@ class TestAlreadyStopped:
         mock_exec.side_effect = [OK_RESULT, ALREADY_STOPPED_RESULT]
 
         # Should NOT raise — one stopped + one OK = no failures
-        stop(name=None, force=False, domain_type=None)
+        stop(name=None, domain_type=None)
 
 
 ALREADY_PURGED_RESULT = PsadminResult(
