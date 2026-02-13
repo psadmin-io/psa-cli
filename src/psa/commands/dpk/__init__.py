@@ -17,8 +17,9 @@ from psa.commands.dpk.core import (
     sync,
 )
 
-# Import data subcommand
+# Import subcommands
 from psa.commands.dpk import data
+from psa.commands.dpk import repo
 
 # Create main dpk app
 app = typer.Typer(
@@ -40,5 +41,6 @@ app.command("stage")(stage)
 app.command("status")(status)
 app.command("sync")(sync)
 
-# Add data subgroup
+# Add subgroups
 app.add_typer(data.app, name="data")
+app.add_typer(repo.app, name="repo")

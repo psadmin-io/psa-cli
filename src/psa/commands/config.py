@@ -93,6 +93,7 @@ SETTABLE_KEYS = {
     "parallel_boot": ("bool", "Use parallelboot instead of boot"),
     "sudo_enabled": ("bool", "Use sudo to run commands as runtime_user"),
     "runtime_user": ("str", "OS user for domain commands"),
+    "dpk_repo_path": ("str", "Path to DPK file repository (PCM mount or local dir)"),
 }
 
 

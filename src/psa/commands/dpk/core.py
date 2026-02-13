@@ -170,6 +170,12 @@ def stage(
         "-r",
         help=f"Source dir with DPK zip files (or ${ENV_DPK_REPO})",
     ),
+    version: Optional[str] = typer.Option(
+        None,
+        "--version",
+        "-V",
+        help="DPK version to stage (e.g. 862.04). Requires dpk_repo_path configured.",
+    ),
     install_dir: Optional[Path] = typer.Option(
         None,
         "--install-dir",
@@ -195,10 +201,28 @@ def stage(
 
     Examples:
         psa dpk stage --repo /nfs/dpk/pt862 --install-dir /tmp/dpk
+        psa dpk stage --version 862.04 --install-dir /tmp/dpk
         export DPK_REPO=/nfs/dpk/pt862 DPK_INSTALL=/tmp/dpk && psa dpk stage
     """
-    # Resolve paths from CLI or environment
+    # Resolve repo path: --repo > --version via DpkRepo > $DPK_REPO > latest in configured repo
     repo_path = _get_env_path(ENV_DPK_REPO, repo)
+
+    if not repo_path and (version or not os.environ.get(ENV_DPK_REPO)):
+        # Try resolving via DpkRepo
+        config = get_config()
+        if config.dpk_repo_path:
+            from psa.core.dpk_repo import DpkRepo
+
+            dpk_repo = DpkRepo(Path(config.dpk_repo_path))
+            try:
+                repo_path = dpk_repo.resolve_version(version)
+                print_info(f"Resolved from DPK repo: {repo_path}")
+            except (FileNotFoundError, ValueError) as e:
+                print_error(str(e))
+                raise typer.Exit(1)
+        elif version:
+            print_error("--version requires dpk_repo_path. Run: psa dpk repo init --path <path>")
+            raise typer.Exit(1)
     install_path = _get_env_path(ENV_DPK_INSTALL, install_dir)
 
     if not repo_path:

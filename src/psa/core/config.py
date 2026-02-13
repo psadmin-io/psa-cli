@@ -56,6 +56,7 @@ class PsaConfig:
     parallel_boot: bool = False  # Use parallelboot instead of boot
     skip_domain_confirm: bool = False  # Skip confirmation when acting on all domains
     multi_homes: list = field(default_factory=list)  # Additional PS_CFG_HOME paths
+    dpk_repo_path: Optional[str] = None  # Path to DPK file repository
 
     @classmethod
     def from_environment(cls) -> "PsaConfig":
@@ -129,6 +130,8 @@ class PsaConfig:
                     config.skip_domain_confirm = data["skip_domain_confirm"]
                 if multi_homes := data.get("multi_homes"):
                     config.multi_homes = [Path(p) for p in multi_homes]
+                if dpk_repo_path := data.get("dpk_repo_path"):
+                    config.dpk_repo_path = dpk_repo_path
 
                 # OPS config (env vars take precedence)
                 if ops_data := data.get("ops"):
@@ -188,6 +191,8 @@ class PsaConfig:
             data["skip_domain_confirm"] = True
         if self.multi_homes:
             data["multi_homes"] = [str(p) for p in self.multi_homes]
+        if self.dpk_repo_path:
+            data["dpk_repo_path"] = self.dpk_repo_path
 
         # OPS config
         if self.ops.url:
