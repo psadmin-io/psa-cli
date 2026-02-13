@@ -12,6 +12,7 @@ from psa.core.compare import (
     CompareResult,
     diff_configs,
     extract_api_properties,
+    format_age,
     get_primary_config,
     list_archive_backups,
     parse_config_to_flat,
@@ -593,7 +594,8 @@ def compare(
         else:
             console.print(f"Archive backups for {config_name}:")
             for i, b in enumerate(backups, 1):
-                console.print(f"  {i}. {b.name}")
+                age = f"  ({format_age(b.parsed_dt)})" if b.parsed_dt else ""
+                console.print(f"  {i}. {b.name}{age}")
             choice = typer.prompt("Select", default="1")
             try:
                 idx = int(choice) - 1

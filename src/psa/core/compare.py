@@ -6,6 +6,7 @@ import configparser
 import io
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -39,6 +40,7 @@ class ArchiveFile:
     path: Path
     name: str
     timestamp: str  # raw MMDDYY_HHMM_SS string
+    parsed_dt: Optional[datetime] = None
 
 
 # Primary config file for each domain type
@@ -52,6 +54,21 @@ PRIMARY_CONFIGS = {
 def get_primary_config(domain_type: str) -> str:
     """Map domain type to its primary config filename."""
     return PRIMARY_CONFIGS.get(domain_type, "psappsrv.cfg")
+
+
+def format_age(dt: datetime, now: Optional[datetime] = None) -> str:
+    """Return human-friendly age string like '3h ago' or '7d ago'."""
+    if now is None:
+        now = datetime.now()
+    delta = now - dt
+    total_minutes = int(delta.total_seconds()) // 60
+    if total_minutes < 60:
+        return f"{max(total_minutes, 0)}m ago"
+    total_hours = total_minutes // 60
+    if total_hours < 24:
+        return f"{total_hours}h ago"
+    total_days = total_hours // 24
+    return f"{total_days}d ago"
 
 
 def list_archive_backups(
@@ -80,10 +97,17 @@ def list_archive_backups(
         m = pattern.match(name)
         if m:
             mmddyy, hhmm, ss = m.group(1), m.group(2), m.group(3)
+            try:
+                parsed_dt = datetime.strptime(
+                    f"{mmddyy}{hhmm}{ss}", "%m%d%y%H%M%S"
+                )
+            except ValueError:
+                parsed_dt = None
             results.append(ArchiveFile(
                 path=archive_path / name,
                 name=name,
                 timestamp=f"{mmddyy}_{hhmm}_{ss}",
+                parsed_dt=parsed_dt,
             ))
 
     # Sort newest-first: convert MMDDYY → YYMMDD for chronological ordering
