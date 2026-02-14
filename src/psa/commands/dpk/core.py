@@ -303,15 +303,17 @@ def stage(
                 shutil.copy2(zip_file, dest)
                 print_success(f"  Copied: {zip_file.name}")
 
-    # Find and extract first zip
-    first_zip = _find_first_zip(install_path)
+    # Find and extract first zip (dry-run: search source since files aren't copied yet)
+    search_dir = repo_path if dry_run else install_path
+    first_zip = _find_first_zip(search_dir)
     if not first_zip:
         print_error("Could not identify first DPK zip file")
         print_info("Expected patterns: *_1of*.zip, *-01.zip, *_1.zip")
         raise typer.Exit(1)
 
     print_info(f"Extracting first zip: {first_zip.name}")
-    unzip_cmd = ["unzip", "-o", str(first_zip), "-d", str(install_path)]
+    dest_zip = install_path / first_zip.name
+    unzip_cmd = ["unzip", "-o", str(dest_zip), "-d", str(install_path)]
 
     if dry_run:
         console.print(f"[dim]Would run: {' '.join(unzip_cmd)}[/dim]")
