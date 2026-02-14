@@ -18,7 +18,8 @@ from psa.core.output import print_error, print_info, print_success, print_warnin
 
 console = Console()
 
-PSA_KIT_REPO = "https://github.com/psadmin-io/psa-kit.git"
+PSA_KIT_REPO_SSH = "git@github.com:psadmin-io/psa-kit.git"
+PSA_KIT_REPO_HTTPS = "https://github.com/psadmin-io/psa-kit.git"
 
 app = typer.Typer(
     name="kit",
@@ -193,30 +194,38 @@ def kit_install(
     print_info(f"Cust location: {resolved_cust}")
 
     if source == "git":
-        # Resolve branch
-        clone_args = ["git", "clone", "--depth", "1"]
-        if branch:
-            clone_args.extend(["--branch", branch])
-        clone_args.extend([PSA_KIT_REPO, str(resolved_dest)])
+        # Try SSH first (private repo), fall back to HTTPS
+        for repo_url in [PSA_KIT_REPO_SSH, PSA_KIT_REPO_HTTPS]:
+            clone_args = ["git", "clone", "--depth", "1"]
+            if branch:
+                clone_args.extend(["--branch", branch])
+            clone_args.extend([repo_url, str(resolved_dest)])
 
-        print_info(f"Cloning from {PSA_KIT_REPO}...")
-        try:
-            result = subprocess.run(
-                clone_args,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            if result.returncode != 0:
-                print_error(f"Git clone failed: {result.stderr.strip()}")
+            print_info(f"Cloning from {repo_url}...")
+            try:
+                result = subprocess.run(
+                    clone_args,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if result.returncode == 0:
+                    print_success(f"Kit installed to {resolved_dest}")
+                    break
+                # Clean up failed clone attempt before retry
+                if resolved_dest.exists():
+                    import shutil
+                    shutil.rmtree(resolved_dest)
+                if repo_url == PSA_KIT_REPO_HTTPS:
+                    print_error(f"Git clone failed: {result.stderr.strip()}")
+                    raise typer.Exit(1)
+                print_info("SSH clone failed, trying HTTPS...")
+            except FileNotFoundError:
+                print_error("git not found. Install git first")
                 raise typer.Exit(1)
-            print_success(f"Kit installed to {resolved_dest}")
-        except FileNotFoundError:
-            print_error("git not found. Install git first")
-            raise typer.Exit(1)
-        except subprocess.TimeoutExpired:
-            print_error("Git clone timed out")
-            raise typer.Exit(1)
+            except subprocess.TimeoutExpired:
+                print_error("Git clone timed out")
+                raise typer.Exit(1)
 
     elif source == "file":
         if not path:
