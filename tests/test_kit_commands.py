@@ -8,7 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from psa.commands.kit import (
-    PSA_KIT_REPO,
+    PSA_KIT_REPO_SSH,
     _resolve_cust_path,
     _resolve_kit_path,
     _scaffold_psa_cust,
@@ -166,7 +166,7 @@ def test_kit_install_git_clone(monkeypatch, tmp_path):
     assert call_args[1] == "clone"
     assert "--branch" in call_args
     assert "v1.0.0" in call_args
-    assert PSA_KIT_REPO in call_args
+    assert PSA_KIT_REPO_SSH in call_args
 
     # Cust was scaffolded
     data_base = cust / "dpk" / "puppet" / "production" / "data"
