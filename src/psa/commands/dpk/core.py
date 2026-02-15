@@ -451,7 +451,7 @@ def setup(
             return
 
         try:
-            result = subprocess.run(cmd, cwd=setup_script.parent, timeout=600)
+            result = subprocess.run(cmd, cwd=setup_script.parent, timeout=600, input="n\n", text=True)
             if result.returncode == 0:
                 print_success("Prerequisites check completed")
             else:
