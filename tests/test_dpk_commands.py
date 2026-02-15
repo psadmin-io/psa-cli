@@ -2,17 +2,19 @@
 
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import yaml
 
 from psa.commands.dpk.core import (
+    _check_dpk_prerequisites,
     _deploy_hiera_files,
     _deploy_module_files,
     _deploy_puppet_conf,
     _generate_hiera_yaml,
     _generate_puppet_conf,
     _get_source_path,
+    DeployType,
 )
 from psa.core.config import PsaConfig
 
@@ -233,3 +235,70 @@ def test_deploy_puppet_conf_dry_run(dpk_tree, tmp_path):
     """Dry run does not write puppet.conf."""
     assert _deploy_puppet_conf(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=True)
     assert not (dpk_tree / "puppet" / "puppet.conf").exists()
+
+
+# --- _check_dpk_prerequisites tests ---
+
+
+def test_prereq_ok_when_libs_exist(tmp_path):
+    """No error when all required libs exist."""
+    lib = tmp_path / "libncursesw.so.5"
+    lib.touch()
+    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", [str(lib)]):
+        with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
+            # Should not raise
+            _check_dpk_prerequisites(DeployType.tools_home)
+
+
+def test_prereq_fix_runs_dnf(tmp_path):
+    """--fix auto-installs missing packages via dnf."""
+    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", ["/nonexistent/lib.so"]):
+        with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
+            mock_run = MagicMock(return_value=MagicMock(returncode=0))
+            with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+                with patch("os.geteuid", return_value=1000):
+                    _check_dpk_prerequisites(DeployType.tools_home, fix=True)
+            # Should have called sudo dnf install
+            args = mock_run.call_args[0][0]
+            assert args[0] == "sudo"
+            assert "dnf" in args
+            assert "ncurses-compat-libs" in args
+
+
+def test_prereq_fix_as_root_no_sudo(tmp_path):
+    """As root, dnf runs without sudo prefix."""
+    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", ["/nonexistent/lib.so"]):
+        with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
+            mock_run = MagicMock(return_value=MagicMock(returncode=0))
+            with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+                with patch("os.geteuid", return_value=0):
+                    _check_dpk_prerequisites(DeployType.tools_home, fix=True)
+            args = mock_run.call_args[0][0]
+            assert args[0] == "dnf"
+
+
+def test_prereq_prompt_yes_installs(tmp_path):
+    """Without --fix, prompts user; 'yes' triggers install."""
+    import typer
+
+    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", ["/nonexistent/lib.so"]):
+        with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
+            mock_run = MagicMock(return_value=MagicMock(returncode=0))
+            with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+                with patch("psa.commands.dpk.core.typer.confirm", return_value=True):
+                    with patch("os.geteuid", return_value=1000):
+                        _check_dpk_prerequisites(DeployType.tools_home, fix=False)
+            assert mock_run.called
+
+
+def test_prereq_prompt_no_exits(tmp_path):
+    """Without --fix, declining prompt exits."""
+    import pytest
+    from click.exceptions import Exit
+
+    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", ["/nonexistent/lib.so"]):
+        with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
+            with patch("psa.commands.dpk.core.typer.confirm", return_value=False):
+                with patch("os.geteuid", return_value=1000):
+                    with pytest.raises(Exit):
+                        _check_dpk_prerequisites(DeployType.tools_home, fix=False)
