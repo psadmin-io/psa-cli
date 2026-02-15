@@ -302,3 +302,35 @@ def test_prereq_prompt_no_exits(tmp_path):
                 with patch("os.geteuid", return_value=1000):
                     with pytest.raises(Exit):
                         _check_dpk_prerequisites(DeployType.tools_home, fix=False)
+
+
+def test_prereq_middleware_checks_libnsl(tmp_path):
+    """deploy_type=all checks libnsl and libaio; --fix installs both."""
+    ncurses = tmp_path / "libncursesw.so.5"
+    ncurses.touch()
+    tux_libs = {
+        "libaio.so.1": ["/nonexistent/libaio.so.1"],
+        "libnsl.so.1": ["/nonexistent/libnsl.so.1"],
+    }
+    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", [str(ncurses)]):
+        with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", tux_libs):
+            mock_run = MagicMock(return_value=MagicMock(returncode=0))
+            with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+                with patch("os.geteuid", return_value=1000):
+                    _check_dpk_prerequisites(DeployType.all, fix=True)
+            args = mock_run.call_args[0][0]
+            assert "libaio" in args
+            assert "libnsl" in args
+
+
+def test_prereq_middleware_skipped_for_tools_home(tmp_path):
+    """deploy_type=tools_home skips middleware lib checks."""
+    ncurses = tmp_path / "libncursesw.so.5"
+    ncurses.touch()
+    tux_libs = {
+        "libnsl.so.1": ["/nonexistent/libnsl.so.1"],
+    }
+    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", [str(ncurses)]):
+        with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", tux_libs):
+            # Should not raise — tools_home skips tuxedo libs
+            _check_dpk_prerequisites(DeployType.tools_home)
