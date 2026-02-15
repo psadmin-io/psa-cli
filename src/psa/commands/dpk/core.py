@@ -1,6 +1,7 @@
 """DPK lifecycle management commands."""
 
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -450,8 +451,12 @@ def setup(
             console.print("[dim]Dry run - not executing[/dim]")
             return
 
+        # Pipe "n" to auto-decline Oracle inventory non-root user prompt.
+        # subprocess.run(input=) doesn't reliably pass stdin through sudo,
+        # so use shell pipe instead.
+        shell_cmd = "echo n | " + " ".join(shlex.quote(c) for c in cmd)
         try:
-            result = subprocess.run(cmd, cwd=setup_script.parent, timeout=600, input="n\n", text=True)
+            result = subprocess.run(shell_cmd, shell=True, cwd=setup_script.parent, timeout=600)
             if result.returncode == 0:
                 print_success("Prerequisites check completed")
             else:
