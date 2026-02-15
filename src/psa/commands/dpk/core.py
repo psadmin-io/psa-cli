@@ -1,6 +1,7 @@
 """DPK lifecycle management commands."""
 
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -389,6 +390,11 @@ def setup(
         "--postcfg",
         help="Run post-configuration only (root). Replaces old 'psa dpk postcfg'.",
     ),
+    fix: bool = typer.Option(
+        False,
+        "--fix",
+        help="Auto-install missing prerequisites without prompting",
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -422,13 +428,14 @@ def setup(
 
     # --- prereq mode ---
     if do_prereq:
-        if os.geteuid() != 0:
-            print_warning("This command should be run as root")
-
         install_path = _get_env_path(ENV_DPK_INSTALL, install_dir)
         if not install_path:
             print_error(f"Install dir not specified. Use --install-dir or set ${ENV_DPK_INSTALL}")
             raise typer.Exit(1)
+
+        # Check our prereqs before Oracle's script
+        if not dry_run:
+            _check_dpk_prerequisites(fix=fix)
 
         setup_script = _find_setup_script(install_path)
         if not setup_script:
@@ -436,14 +443,20 @@ def setup(
             raise typer.Exit(1)
 
         cmd = [str(setup_script), "--prereq"]
+        if os.geteuid() != 0:
+            cmd = ["sudo"] + cmd
         print_info(f"Running: {' '.join(cmd)}")
 
         if dry_run:
             console.print("[dim]Dry run - not executing[/dim]")
             return
 
+        # Pipe "n" to auto-decline Oracle inventory non-root user prompt.
+        # subprocess.run(input=) doesn't reliably pass stdin through sudo,
+        # so use shell pipe instead.
+        shell_cmd = "echo n | " + " ".join(shlex.quote(c) for c in cmd)
         try:
-            result = subprocess.run(cmd, cwd=setup_script.parent, timeout=600)
+            result = subprocess.run(shell_cmd, shell=True, cwd=setup_script.parent, timeout=600)
             if result.returncode == 0:
                 print_success("Prerequisites check completed")
             else:
@@ -456,9 +469,6 @@ def setup(
 
     # --- postcfg mode ---
     if do_postcfg:
-        if os.geteuid() != 0:
-            print_warning("This command should be run as root")
-
         install_path = _get_env_path(ENV_DPK_INSTALL, install_dir)
         base_path = _get_env_path(ENV_DPK_BASE, base_dir)
 
@@ -476,6 +486,8 @@ def setup(
             raise typer.Exit(1)
 
         cmd = [str(setup_script), "--postcfg", "--psft_base_dir", str(base_path)]
+        if os.geteuid() != 0:
+            cmd = ["sudo"] + cmd
         print_info(f"Running: {' '.join(cmd)}")
 
         if dry_run:
@@ -497,7 +509,7 @@ def setup(
     # --- default setup mode ---
     # Check prerequisites first
     if not dry_run:
-        _check_dpk_prerequisites(deploy_type)
+        _check_dpk_prerequisites(deploy_type, fix=fix)
 
     # Resolve paths
     install_path = _get_env_path(ENV_DPK_INSTALL, install_dir)
@@ -558,6 +570,9 @@ deploy_type={deploy_type.value}
         if debug:
             cmd.append("--debug")
 
+        if os.geteuid() != 0:
+            cmd = ["sudo"] + cmd
+
         print_info(f"Command: {' '.join(cmd)}")
         print_info("Domains will NOT be configured - use 'psa dpk apply' after setup")
 
@@ -571,7 +586,7 @@ deploy_type={deploy_type.value}
             result = subprocess.run(
                 cmd,
                 cwd=setup_script.parent,
-                timeout=3600,  # 1 hour timeout (software only is faster)
+                timeout=7200,  # 2 hour timeout
             )
             if result.returncode == 0:
                 print_success("DPK setup completed successfully")
@@ -580,7 +595,7 @@ deploy_type={deploy_type.value}
                 print_error(f"DPK setup failed (exit {result.returncode})")
                 raise typer.Exit(1)
         except subprocess.TimeoutExpired:
-            print_error("Setup timed out (>1 hour)")
+            print_error("Setup timed out (>2 hours)")
             raise typer.Exit(1)
         except PermissionError:
             print_error(f"Permission denied: {setup_script}")
@@ -647,6 +662,8 @@ def cleanup(
 
     # Build command
     cmd = [str(setup_script), "--cleanup", "--psft_base_dir", str(base_path)]
+    if os.geteuid() != 0:
+        cmd = ["sudo"] + cmd
 
     print_info(f"Running: {' '.join(cmd)}")
 
@@ -912,12 +929,14 @@ def apply(
         raise typer.Exit(1)
 
 
-def _check_dpk_prerequisites(deploy_type: DeployType = DeployType.all) -> None:
-    """Check DPK prerequisites are installed."""
+def _check_dpk_prerequisites(
+    deploy_type: DeployType = DeployType.all, fix: bool = False
+) -> None:
+    """Check DPK prerequisites are installed. Optionally auto-install missing packages."""
     missing = []
-    install_cmds = []
+    install_pkgs = []
 
-    # Check for ncurses library (required by DPK Ruby)
+    # Check for ncurses library (required by DPK bundled Python/Ruby)
     ncurses_found = False
     for lib_path in DPK_REQUIRED_LIBS:
         if Path(lib_path).exists():
@@ -926,7 +945,7 @@ def _check_dpk_prerequisites(deploy_type: DeployType = DeployType.all) -> None:
 
     if not ncurses_found:
         missing.append("libncursesw.so.5")
-        install_cmds.append("ncurses-compat-libs")
+        install_pkgs.append("ncurses-compat-libs")
 
     # Check Tuxedo/OUI libs if installing middleware
     if deploy_type != DeployType.tools_home:
@@ -939,7 +958,7 @@ def _check_dpk_prerequisites(deploy_type: DeployType = DeployType.all) -> None:
             if not lib_found:
                 missing.append(lib_name)
                 if "libaio" in lib_name:
-                    install_cmds.append("libaio")
+                    install_pkgs.append("libaio")
 
     if missing:
         print_error("Missing DPK prerequisites:")
@@ -947,8 +966,26 @@ def _check_dpk_prerequisites(deploy_type: DeployType = DeployType.all) -> None:
             console.print(f"  [red]✗[/red] {lib}")
         console.print()
 
-        if install_cmds:
-            print_info(f"Install missing libraries: dnf install {' '.join(install_cmds)}")
+        if install_pkgs:
+            dnf_cmd = ["dnf", "install", "-y"] + install_pkgs
+            if os.geteuid() != 0:
+                dnf_cmd = ["sudo"] + dnf_cmd
+
+            should_install = fix
+            if not fix:
+                print_info(f"Install command: {' '.join(dnf_cmd)}")
+                should_install = typer.confirm("Install missing packages?")
+
+            if should_install:
+                print_info(f"Running: {' '.join(dnf_cmd)}")
+                result = subprocess.run(dnf_cmd)
+                if result.returncode != 0:
+                    print_error("Package install failed")
+                    raise typer.Exit(1)
+                print_success("Prerequisites installed")
+                return
+            else:
+                raise typer.Exit(1)
 
         # Additional guidance for OUI/middleware installs
         if deploy_type != DeployType.tools_home:
