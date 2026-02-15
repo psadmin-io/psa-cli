@@ -27,6 +27,7 @@ DPK_REQUIRED_LIBS = [
 # Note: Actual requirements vary by OS version
 TUXEDO_REQUIRED_LIBS = {
     "libaio.so.1": ["/lib64/libaio.so.1", "/usr/lib64/libaio.so.1"],
+    "libnsl.so.1": ["/lib64/libnsl.so.1", "/usr/lib64/libnsl.so.1"],
 }
 
 # Patterns to detect first DPK zip (in priority order)
@@ -957,8 +958,9 @@ def _check_dpk_prerequisites(
                     break
             if not lib_found:
                 missing.append(lib_name)
-                if "libaio" in lib_name:
-                    install_pkgs.append("libaio")
+                pkg_map = {"libaio.so.1": "libaio", "libnsl.so.1": "libnsl"}
+                if lib_name in pkg_map:
+                    install_pkgs.append(pkg_map[lib_name])
 
     if missing:
         print_error("Missing DPK prerequisites:")
