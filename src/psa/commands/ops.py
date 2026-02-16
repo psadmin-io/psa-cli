@@ -1,16 +1,17 @@
 """PSA-OPS management commands."""
 
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from psa.commands import init
 from psa.core.config import CONFIG_PATH, get_config
 from psa.core.discovery import run_discovery
 from psa.core.domain_cache import get_cached_domain_id, update_cache_from_ingest
 from psa.core.output import print_error, print_json, print_success
-from psa.core.api import ApiClient, ApiError, get_hostname, get_ip_address
+from psa.core.api import ApiClient, ApiError, get_hostname
 
 console = Console()
 
@@ -21,6 +22,9 @@ app = typer.Typer(
 )
 
 
+app.command(name="setup")(init.ops_setup)
+
+
 @app.command(name="environments")
 def list_environments() -> None:
     """List environments from PSA-OPS"""
@@ -28,7 +32,7 @@ def list_environments() -> None:
 
     if not config.ops.is_configured():
         console.print("[red]PSA-OPS not configured[/red]")
-        console.print("Run [cyan]psa config setup --ops-url <url>[/cyan] first")
+        console.print("Run [cyan]psa ops setup --url <url>[/cyan] first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
@@ -76,7 +80,7 @@ def list_nodes() -> None:
 
     if not config.ops.is_configured():
         console.print("[red]PSA-OPS not configured[/red]")
-        console.print("Run [cyan]psa config setup --ops-url <url>[/cyan] first")
+        console.print("Run [cyan]psa ops setup --url <url>[/cyan] first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
@@ -119,87 +123,6 @@ def list_nodes() -> None:
     console.print(table)
 
 
-@app.command(name="register")
-def register(
-    environment_id: Optional[str] = typer.Option(
-        None,
-        "--environment-id",
-        "-e",
-        help="Environment ID (uses saved config if not provided)",
-    ),
-    role: Optional[str] = typer.Option(
-        None,
-        "--role",
-        help="Node role: app, web, prcs, mid, webapp",
-    ),
-) -> None:
-    """Register this node with PSA-OPS"""
-    config = get_config()
-    hostname = get_hostname()
-
-    if not config.ops.is_configured():
-        console.print("[red]PSA-OPS not configured[/red]")
-        console.print("Run [cyan]psa config setup --ops-url <url>[/cyan] first")
-        raise typer.Exit(1)
-
-    env_id = environment_id or config.ops.environment_id
-    if not env_id:
-        console.print("[red]No environment ID[/red]")
-        console.print("Use --environment-id or run [cyan]psa config setup[/cyan] first")
-        raise typer.Exit(1)
-
-    # Validate role if provided
-    valid_roles = ["app", "web", "prcs", "mid", "webapp"]
-    if role and role not in valid_roles:
-        console.print(f"[red]Invalid role:[/red] {role}")
-        console.print(f"Valid roles: {', '.join(valid_roles)}")
-        raise typer.Exit(1)
-
-    client = ApiClient(config.ops.url)
-
-    # Check if node exists
-    existing = client.get_node_by_hostname(hostname)
-    if existing:
-        console.print(f"[yellow]Node already registered:[/yellow] {existing['id'][:8]}...")
-        if role:
-            try:
-                client.update_node(existing["id"], ps_role=role)
-                config.ops.ps_role = role
-                config.ops.node_id = existing["id"]
-                config.save()
-                console.print(f"[green]\u2713[/green] Role updated to [cyan]{role}[/cyan]")
-            except ApiError as e:
-                console.print(f"[red]\u2717[/red] Failed to update role: {e}")
-                raise typer.Exit(1)
-        return
-
-    # Create node
-    ip_address = get_ip_address()
-    console.print(f"Registering node [cyan]{hostname}[/cyan] ({ip_address})...")
-    try:
-        create_kwargs = {}
-        if role:
-            create_kwargs["ps_role"] = role
-        node = client.create_node(
-            name=hostname,
-            hostname=hostname,
-            ip_address=ip_address,
-            environment_id=env_id,
-            **create_kwargs,
-        )
-        console.print(f"[green]\u2713[/green] Node registered: {node['id'][:8]}...")
-
-        # Update config
-        config.ops.node_id = node["id"]
-        if role:
-            config.ops.ps_role = role
-        config.save()
-        console.print("[green]\u2713[/green] Configuration updated")
-    except ApiError as e:
-        console.print(f"[red]\u2717[/red] Registration failed: {e}")
-        raise typer.Exit(1)
-
-
 @app.command(name="report")
 def report(
     domain_type: Optional[str] = typer.Option(
@@ -232,7 +155,7 @@ def report(
     Discover domains and sync to PSA-OPS
 
     Scans local domains and pushes results to the configured
-    PSA-OPS. Requires PSA-OPS to be configured via 'psa config setup'.
+    PSA-OPS. Requires PSA-OPS to be configured via 'psa ops setup'.
 
     Examples:
         psa ops report
@@ -242,7 +165,7 @@ def report(
     hostname = get_hostname()
 
     if not config.ops.is_configured():
-        print_error("PSA-OPS not configured. Run 'psa config setup' first")
+        print_error("PSA-OPS not configured. Run 'psa ops setup --url <url>' first")
         raise typer.Exit(1)
 
     if ps_cfg_home:
@@ -309,7 +232,7 @@ def status() -> None:
 
     if not config.ops.is_configured():
         console.print("[yellow]Not configured[/yellow]")
-        console.print("\nRun [cyan]psa config setup --ops-url <url>[/cyan] to configure")
+        console.print("\nRun [cyan]psa ops setup --url <url>[/cyan] to configure")
         return
 
     console.print(f"Config file: [cyan]{CONFIG_PATH}[/cyan]")
@@ -378,7 +301,7 @@ def set_env(
     config = get_config()
 
     if not config.ops.is_configured():
-        print_error("PSA-OPS not configured. Run 'psa config setup' first")
+        print_error("PSA-OPS not configured. Run 'psa ops setup --url <url>' first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
@@ -398,3 +321,121 @@ def set_env(
     except ApiError as e:
         print_error(f"Failed to assign environment: {e}")
         raise typer.Exit(1)
+
+
+def _resolve_domain_id(client: ApiClient, name: str) -> str:
+    """Resolve domain name to UUID. Checks local cache first, then PSA-OPS."""
+    cached = get_cached_domain_id(name)
+    if cached:
+        return cached
+    domain = client.resolve_domain(name)
+    if not domain:
+        print_error(f"Domain '{name}' not found in PSA-OPS")
+        raise typer.Exit(1)
+    return domain["id"]
+
+
+@app.command(name="compare")
+def compare(
+    domains: List[str] = typer.Argument(
+        ...,
+        help="Domain names to compare (at least 2)",
+    ),
+    config_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="Config file type (e.g. psappsrv.cfg, psprcs.cfg)",
+    ),
+    show_all: bool = typer.Option(
+        False,
+        "--all",
+        "-a",
+        help="Show all rows including identical values",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output as JSON",
+    ),
+) -> None:
+    """
+    Compare config across domains
+
+    Fetches config comparison from PSA-OPS for 2+ domains and displays
+    differences. By default only shows 'different' and 'missing' rows.
+
+    Examples:
+        psa ops compare APPDOM1 APPDOM2
+        psa ops compare APPDOM1 APPDOM2 --type psappsrv.cfg
+        psa ops compare APPDOM1 APPDOM2 APPDOM3 --all
+    """
+    if len(domains) < 2:
+        print_error("At least 2 domain names required for comparison")
+        raise typer.Exit(1)
+
+    config = get_config()
+    if not config.ops.is_configured():
+        print_error("PSA-OPS not configured. Run 'psa ops setup --url <url>' first")
+        raise typer.Exit(1)
+
+    client = ApiClient(config.ops.url)
+
+    # Resolve names to UUIDs
+    domain_ids = []
+    for name in domains:
+        domain_id = _resolve_domain_id(client, name)
+        domain_ids.append(domain_id)
+
+    try:
+        result = client.compare_configs(domain_ids, config_type)
+    except ApiError as e:
+        print_error(f"Compare failed: {e}")
+        raise typer.Exit(1)
+
+    if json_output:
+        import json
+        console.print_json(json.dumps(result, default=str, indent=2))
+        return
+
+    rows = result.get("rows", [])
+    if not rows:
+        console.print("[dim]No config data to compare[/dim]")
+        return
+
+    # Filter rows unless --all
+    if not show_all:
+        rows = [r for r in rows if r.get("status") != "same"]
+
+    # Count summary
+    all_rows = result.get("rows", [])
+    same_count = sum(1 for r in all_rows if r.get("status") == "same")
+    diff_count = sum(1 for r in all_rows if r.get("status") == "different")
+    missing_count = sum(1 for r in all_rows if r.get("status") == "missing")
+
+    # Build table
+    table = Table(title="Config Comparison")
+    table.add_column("Key", style="cyan")
+    for name in domains:
+        table.add_column(name, style="white")
+    table.add_column("Status", style="dim")
+
+    for row in rows:
+        status = row.get("status", "")
+        values = row.get("values", {})
+        style = ""
+        if status == "different":
+            style = "yellow"
+        elif status == "missing":
+            style = "red"
+
+        cells = [row.get("key", "")]
+        for name in domains:
+            val = values.get(name, "")
+            cells.append(str(val) if val is not None else "[dim]-[/dim]")
+        cells.append(f"[{style}]{status}[/{style}]" if style else status)
+        table.add_row(*cells)
+
+    console.print(table)
+    console.print(f"\n{same_count} same, {diff_count} different, {missing_count} missing")
