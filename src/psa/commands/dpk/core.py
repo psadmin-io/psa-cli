@@ -7,13 +7,13 @@ import subprocess
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import typer
 from rich.console import Console
 
 from psa.core.config import get_config
-from psa.core.output import print_error, print_info, print_success, print_warning
+from psa.core.output import print_error, print_info, print_json, print_success, print_warning
 
 console = Console()
 
@@ -685,7 +685,14 @@ def cleanup(
 
 
 @app.command("status")
-def status() -> None:
+def status(
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output as JSON",
+    ),
+) -> None:
     """
     Check DPK installation status
 
@@ -693,14 +700,21 @@ def status() -> None:
     - Puppet is installed and accessible
     - Hiera configuration exists
     - DPK modules are available
+    - PeopleTools manifest (version + middleware)
 
     Examples:
         psa dpk status
+        psa dpk status --json
     """
-    print_info("Checking DPK status...")
+    if not json_output:
+        print_info("Checking DPK status...")
 
     # Check Puppet
-    puppet_ok = _verify_puppet(exit_on_fail=False)
+    if json_output:
+        puppet_info = _verify_puppet(exit_on_fail=False, quiet=True)
+        puppet_ok = puppet_info["installed"]
+    else:
+        puppet_ok = _verify_puppet(exit_on_fail=False)
 
     # Check common DPK locations
     dpk_paths = [
@@ -716,29 +730,69 @@ def status() -> None:
             dpk_found = path
             break
 
+    hiera_ok = False
+    site_ok = False
+    manifest_data = None
+
     if dpk_found:
-        print_success(f"DPK found: {dpk_found}")
+        if not json_output:
+            print_success(f"DPK found: {dpk_found}")
+
+        # Parse manifest
+        manifest_path = dpk_found / "pt-manifest"
+        if manifest_path.exists():
+            manifest_data = _parse_manifest(manifest_path)
+            if not json_output:
+                pt_ver = manifest_data.get("version", "unknown")
+                print_success(f"PeopleTools: {pt_ver}")
+                for label, key in [
+                    ("Oracle Client", "oracleclient_version"),
+                    ("JDK", "jdk_version"),
+                    ("WebLogic", "weblogic_version"),
+                    ("Tuxedo", "tuxedo_version"),
+                ]:
+                    val = manifest_data.get(key)
+                    if val:
+                        print_info(f"  {label}: {val}")
 
         # Check for hiera.yaml
         hiera_yaml = dpk_found / "puppet" / "production" / "hiera.yaml"
-        if hiera_yaml.exists():
-            print_success(f"Hiera config: {hiera_yaml}")
-        else:
-            print_warning("Hiera config not found")
+        hiera_ok = hiera_yaml.exists()
+        if not json_output:
+            if hiera_ok:
+                print_success(f"Hiera config: {hiera_yaml}")
+            else:
+                print_warning("Hiera config not found")
 
         # Check for site.pp
         site_pp = dpk_found / "puppet" / "production" / "manifests" / "site.pp"
-        if site_pp.exists():
-            print_success(f"Site manifest: {site_pp}")
-        else:
-            print_warning("Site manifest not found")
+        site_ok = site_pp.exists()
+        if not json_output:
+            if site_ok:
+                print_success(f"Site manifest: {site_pp}")
+            else:
+                print_warning("Site manifest not found")
     else:
-        print_warning("DPK installation not found in standard locations")
+        if not json_output:
+            print_warning("DPK installation not found in standard locations")
 
-    if puppet_ok and dpk_found:
-        print_success("DPK is ready for provisioning")
+    ready = puppet_ok and dpk_found is not None
+
+    if json_output:
+        data = {
+            "puppet": puppet_info,
+            "dpk": {"found": dpk_found is not None, "path": str(dpk_found) if dpk_found else None},
+            "manifest": manifest_data,
+            "hiera": hiera_ok,
+            "site_manifest": site_ok,
+            "ready": ready,
+        }
+        print_json(data)
     else:
-        print_warning("DPK setup incomplete")
+        if ready:
+            print_success("DPK is ready for provisioning")
+        else:
+            print_warning("DPK setup incomplete")
 
 
 @app.command("apply")
@@ -1002,8 +1056,21 @@ def _check_dpk_prerequisites(
     print_success("DPK prerequisites OK")
 
 
-def _verify_puppet(exit_on_fail: bool = True) -> bool:
-    """Verify DPK relocatable Puppet is installed and accessible."""
+def _parse_manifest(manifest_path: Path) -> dict:
+    """Parse a DPK manifest file (key=value format)."""
+    data = {}
+    for line in manifest_path.read_text().strip().splitlines():
+        if "=" in line:
+            key, _, value = line.partition("=")
+            data[key.strip()] = value.strip()
+    return data
+
+
+def _verify_puppet(exit_on_fail: bool = True, quiet: bool = False) -> Union[bool, dict]:
+    """Verify DPK relocatable Puppet is installed and accessible.
+
+    When quiet=True, suppress prints and return a dict instead of bool.
+    """
     dpk_base = Path(os.environ.get(ENV_DPK_BASE, DEFAULT_DPK_BASE))
     puppet_bin = dpk_base / "psft_puppet_agent" / "bin" / "puppet"
 
@@ -1017,10 +1084,15 @@ def _verify_puppet(exit_on_fail: bool = True) -> bool:
             )
             if result.returncode == 0:
                 version = result.stdout.strip()
+                if quiet:
+                    return {"installed": True, "path": str(puppet_bin), "version": version}
                 print_success(f"Puppet installed: {puppet_bin} (v{version})")
                 return True
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass
+
+    if quiet:
+        return {"installed": False, "path": str(puppet_bin), "version": None}
 
     if exit_on_fail:
         print_error("Puppet not found or not working")
