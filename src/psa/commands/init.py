@@ -14,13 +14,7 @@ from psa.core.domain import DomainDiscovery
 console = Console()
 
 
-def init(
-    ops_url: Optional[str] = typer.Option(
-        None,
-        "--ops-url",
-        "-r",
-        help="PSA-OPS URL (e.g., http://ops.psaops.local:8000). If omitted, runs in standalone mode",
-    ),
+def standalone_setup(
     ps_cfg_home: Optional[str] = typer.Option(
         None,
         "--ps-cfg-home",
@@ -33,11 +27,38 @@ def init(
         "-u",
         help="Runtime user (default: psadm2)",
     ),
+    non_interactive: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Non-interactive mode, accept defaults",
+    ),
+) -> None:
+    """
+    Initialize psa in standalone mode
+
+    Configures local paths and discovers domains.
+
+    Examples:
+        psa config setup                                    # Auto-detect paths
+        psa config setup --ps-cfg-home /u01/app/psoft/cfg   # Explicit path
+    """
+    config = get_config()
+    _init_standalone_mode(config, ps_cfg_home, runtime_user, non_interactive)
+
+
+def ops_setup(
+    url: str = typer.Option(
+        ...,
+        "--url",
+        "-r",
+        help="PSA-OPS URL (e.g., http://ops.psaops.local:8000)",
+    ),
     environment_id: Optional[str] = typer.Option(
         None,
         "--environment-id",
         "-e",
-        help="Environment ID (ops mode only, skips auto-detection)",
+        help="Environment ID (skips auto-detection)",
     ),
     role: Optional[str] = typer.Option(
         None,
@@ -52,25 +73,16 @@ def init(
     ),
 ) -> None:
     """
-    Initialize psa with PSA-OPS
+    Connect psa to PSA-OPS
 
-    Standalone mode (no --ops-url):
-        Configures local paths and discovers domains.
-
-    PSA-OPS mode (with --ops-url):
-        Connects to PSA-OPS, registers node, and saves connection config.
+    Registers this node with PSA-OPS and saves connection config.
 
     Examples:
-        psa config setup                                    # Standalone, auto-detect paths
-        psa config setup --ps-cfg-home /u01/app/psoft/cfg   # Standalone, explicit path
-        psa config setup --ops-url http://ops:8000          # PSA-OPS mode
+        psa ops setup --url http://ops:8000
+        psa ops setup --url http://ops:8000 --role app --yes
     """
     config = get_config()
-
-    if ops_url:
-        _init_ops_mode(config, ops_url, environment_id, role, non_interactive)
-    else:
-        _init_standalone_mode(config, ps_cfg_home, runtime_user, non_interactive)
+    _init_ops_mode(config, url, environment_id, role, non_interactive)
 
 
 def _detect_ps_paths_from_runtime_user(config, console) -> None:
@@ -169,7 +181,7 @@ def _init_standalone_mode(
     console.print("  [cyan]psa domain status[/cyan] Check domain status")
     console.print("  [cyan]psa domain start[/cyan]  Start a domain")
     console.print("\nTo connect to PSA-OPS later:")
-    console.print("  [cyan]psa config setup --ops-url http://ops:8000[/cyan]")
+    console.print("  [cyan]psa ops setup --url http://ops:8000[/cyan]")
 
 
 def _init_ops_mode(

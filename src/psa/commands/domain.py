@@ -541,7 +541,7 @@ def compare(
     if ops:
         # Compare vs last API capture
         if not config.ops.is_configured():
-            print_error("PSA-OPS not configured. Run 'psa config setup' first")
+            print_error("PSA-OPS not configured. Run 'psa ops setup --url <url>' first")
             raise typer.Exit(1)
 
         client = ApiClient(config.ops.url)
