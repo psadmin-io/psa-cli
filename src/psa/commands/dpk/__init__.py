@@ -6,19 +6,15 @@ import typer
 from psa.commands.dpk.core import (
     apply,
     cleanup,
-    hiera,
-    modules,
-    postcfg,
-    prereq,
     setup,
-    site,
     stage,
     status,
     sync,
 )
 
-# Import data subcommand
+# Import subcommands
 from psa.commands.dpk import data
+from psa.commands.dpk import repo
 
 # Create main dpk app
 app = typer.Typer(
@@ -30,15 +26,11 @@ app = typer.Typer(
 # Add core commands directly to dpk (alphabetized)
 app.command("apply")(apply)
 app.command("cleanup")(cleanup)
-app.command("hiera")(hiera)
-app.command("modules")(modules)
-app.command("postcfg")(postcfg)
-app.command("prereq")(prereq)
 app.command("setup")(setup)
-app.command("site")(site)
 app.command("stage")(stage)
 app.command("status")(status)
 app.command("sync")(sync)
 
-# Add data subgroup
+# Add subgroups
 app.add_typer(data.app, name="data")
+app.add_typer(repo.app, name="repo")

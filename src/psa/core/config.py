@@ -12,6 +12,8 @@ import yaml
 # Default paths for PeopleSoft installations
 DEFAULT_PS_BASE = "/u01/app/psoft"
 DEFAULT_IO_BASE = "/u01/app/io"
+DEFAULT_PSA_KIT = "/u01/app/io/psa-kit"
+DEFAULT_PSA_CUST = "/u01/app/io/psa-cust"
 
 # Config file location
 CONFIG_PATH = Path.home() / ".config" / "psa" / "config.yaml"
@@ -45,6 +47,8 @@ class PsaConfig:
 
     ps_base: Path = field(default_factory=lambda: Path(DEFAULT_PS_BASE))
     io_base: Path = field(default_factory=lambda: Path(DEFAULT_IO_BASE))
+    psa_kit_path: Optional[Path] = None
+    psa_cust_path: Optional[Path] = None
     ps_cfg_home: Optional[Path] = None
     ps_home: Optional[Path] = None
     ps_app_home: Optional[Path] = None
@@ -56,6 +60,7 @@ class PsaConfig:
     parallel_boot: bool = False  # Use parallelboot instead of boot
     skip_domain_confirm: bool = False  # Skip confirmation when acting on all domains
     multi_homes: list = field(default_factory=list)  # Additional PS_CFG_HOME paths
+    dpk_repo_path: Optional[str] = None  # Path to DPK file repository
 
     @classmethod
     def from_environment(cls) -> "PsaConfig":
@@ -80,6 +85,12 @@ class PsaConfig:
 
         if io_base := os.environ.get("IO_BASE"):
             config.io_base = Path(io_base)
+
+        if psa_kit := os.environ.get("PSA_KIT"):
+            config.psa_kit_path = Path(psa_kit)
+
+        if psa_cust := os.environ.get("PSA_CUST"):
+            config.psa_cust_path = Path(psa_cust)
 
         # OPS API from environment
         if ops_url := os.environ.get("PSA_OPS_URL"):
@@ -117,6 +128,10 @@ class PsaConfig:
                     config.ps_app_home = Path(ps_app_home)
                 if ps_cust_home := data.get("ps_cust_home"):
                     config.ps_cust_home = Path(ps_cust_home)
+                if psa_kit_path := data.get("psa_kit_path"):
+                    config.psa_kit_path = Path(psa_kit_path)
+                if psa_cust_path := data.get("psa_cust_path"):
+                    config.psa_cust_path = Path(psa_cust_path)
                 if runtime_user := data.get("runtime_user", data.get("domain_user")):
                     config.runtime_user = runtime_user
 
@@ -129,6 +144,8 @@ class PsaConfig:
                     config.skip_domain_confirm = data["skip_domain_confirm"]
                 if multi_homes := data.get("multi_homes"):
                     config.multi_homes = [Path(p) for p in multi_homes]
+                if dpk_repo_path := data.get("dpk_repo_path"):
+                    config.dpk_repo_path = dpk_repo_path
 
                 # OPS config (env vars take precedence)
                 if ops_data := data.get("ops"):
@@ -176,6 +193,10 @@ class PsaConfig:
             data["ps_app_home"] = str(self.ps_app_home)
         if self.ps_cust_home:
             data["ps_cust_home"] = str(self.ps_cust_home)
+        if self.psa_kit_path:
+            data["psa_kit_path"] = str(self.psa_kit_path)
+        if self.psa_cust_path:
+            data["psa_cust_path"] = str(self.psa_cust_path)
         if self.runtime_user != "psadm2":
             data["runtime_user"] = self.runtime_user
 
@@ -188,6 +209,8 @@ class PsaConfig:
             data["skip_domain_confirm"] = True
         if self.multi_homes:
             data["multi_homes"] = [str(p) for p in self.multi_homes]
+        if self.dpk_repo_path:
+            data["dpk_repo_path"] = self.dpk_repo_path
 
         # OPS config
         if self.ops.url:

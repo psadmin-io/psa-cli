@@ -35,7 +35,7 @@ def get(
     # Get config and connect to PSA-OPS
     config = get_config()
     if not config.ops.is_configured():
-        print_error("PSA-OPS not configured. Run 'psa config setup' first")
+        print_error("PSA-OPS not configured. Run 'psa ops setup --url <url>' first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
@@ -89,7 +89,7 @@ def import_data(
     # Get config and connect to PSA-OPS
     config = get_config()
     if not config.ops.is_configured():
-        print_error("PSA-OPS not configured. Run 'psa config setup' first")
+        print_error("PSA-OPS not configured. Run 'psa ops setup --url <url>' first")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
@@ -124,35 +124,24 @@ def import_data(
     print_success(f"Imported {level}/{key}: {created} created, {updated} updated, {deleted} deleted ({mode})")
 
 
-@app.command("sync")
-def sync(
-    tier: Optional[str] = typer.Option(None, "--tier", "-t", help="Tier name (DEV, TEST, PROD)"),
-    environments: Optional[str] = typer.Option(None, "--environments", "-e", help="Comma-separated environment names"),
-    hiera_path: Path = typer.Option(
-        Path("/u01/app/psoft/dpk/puppet/production/data/cust"),
-        "--hiera-path",
-        "-p",
-        help="Hiera cust/ directory path"
-    ),
-    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Show what would sync without writing"),
-):
-    """
-    Sync Hiera YAMLs from PSA-OPS to local Hiera paths
+def _sync_ops_data(
+    tier: Optional[str] = None,
+    environments: Optional[str] = None,
+    hiera_path: Optional[Path] = None,
+    dry_run: bool = False,
+) -> None:
+    """Sync Hiera YAMLs from PSA-OPS to local Hiera paths.
 
-    Pulls tier and environment YAMLs from PSA-OPS and writes to:
-    - {hiera_path}/tier/{tier}.yaml
-    - {hiera_path}/env/{environment}.yaml
-
-    Examples:
-        psa dpk data sync --tier DEV --environments HRDEV,FSCMDEV
-        psa dpk data sync --tier PROD --environments HRPRD --dry-run
-        psa dpk data sync --tier DEV --environments HRDEV --hiera-path /tmp/hiera/cust
+    Core logic extracted for use by both 'psa dpk data sync' (removed) and
+    'psa dpk sync --data'.  Raises typer.Exit on failure.
     """
+    if hiera_path is None:
+        hiera_path = Path("/u01/app/psoft/dpk/puppet/production/data/cust")
 
     # Get config and connect to PSA-OPS
     config = get_config()
     if not config.ops.is_configured():
-        print_error("PSA-OPS not configured. Run 'psa config setup' first")
+        print_error("PSA-OPS not configured. Run 'psa ops setup --url <url>' first")
         raise typer.Exit(1)
 
     ops = config.ops
@@ -171,7 +160,7 @@ def sync(
         print_warning(f"Using config defaults: {', '.join(defaulted)}")
 
     if not tier and not environments:
-        print_error("Specify --tier and/or --environments (or run 'psa config setup' to set defaults)")
+        print_error("Specify --tier and/or --environments (or run 'psa ops setup' to set defaults)")
         raise typer.Exit(1)
 
     client = ApiClient(config.ops.url)
