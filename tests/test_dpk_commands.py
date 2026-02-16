@@ -14,6 +14,7 @@ from psa.commands.dpk.core import (
     _generate_hiera_yaml,
     _generate_puppet_conf,
     _get_source_path,
+    _verify_puppet,
     DeployType,
 )
 from psa.core.config import PsaConfig
@@ -334,3 +335,31 @@ def test_prereq_middleware_skipped_for_tools_home(tmp_path):
         with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", tux_libs):
             # Should not raise — tools_home skips tuxedo libs
             _check_dpk_prerequisites(DeployType.tools_home)
+
+
+# --- _verify_puppet tests ---
+
+
+def test_verify_puppet_finds_dpk_puppet(tmp_path, monkeypatch):
+    """_verify_puppet finds DPK relocatable Puppet at {base}/psft_puppet_agent/bin/puppet."""
+    puppet_bin = tmp_path / "psft_puppet_agent" / "bin" / "puppet"
+    puppet_bin.parent.mkdir(parents=True)
+    puppet_bin.touch(mode=0o755)
+
+    monkeypatch.setenv("DPK_BASE", str(tmp_path))
+
+    mock_run = MagicMock(return_value=MagicMock(returncode=0, stdout="7.29.1\n"))
+    with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+        result = _verify_puppet(exit_on_fail=False)
+
+    assert result is True
+    mock_run.assert_called_once()
+    assert str(puppet_bin) in mock_run.call_args[0][0]
+
+
+def test_verify_puppet_not_found_no_exit(tmp_path, monkeypatch):
+    """_verify_puppet returns False when Puppet binary missing and exit_on_fail=False."""
+    monkeypatch.setenv("DPK_BASE", str(tmp_path))
+
+    result = _verify_puppet(exit_on_fail=False)
+    assert result is False

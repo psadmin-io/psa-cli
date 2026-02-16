@@ -1003,31 +1003,11 @@ def _check_dpk_prerequisites(
 
 
 def _verify_puppet(exit_on_fail: bool = True) -> bool:
-    """Verify Puppet is installed and accessible."""
-    puppet_paths = [
-        Path("/opt/puppetlabs/puppet/bin/puppet"),
-        Path("/usr/bin/puppet"),
-    ]
+    """Verify DPK relocatable Puppet is installed and accessible."""
+    dpk_base = Path(os.environ.get(ENV_DPK_BASE, DEFAULT_DPK_BASE))
+    puppet_bin = dpk_base / "psft_puppet_agent" / "bin" / "puppet"
 
-    puppet_bin = None
-    for path in puppet_paths:
-        if path.exists():
-            puppet_bin = path
-            break
-
-    if not puppet_bin:
-        try:
-            result = subprocess.run(
-                ["which", "puppet"],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                puppet_bin = Path(result.stdout.strip())
-        except FileNotFoundError:
-            pass
-
-    if puppet_bin:
+    if puppet_bin.exists():
         try:
             result = subprocess.run(
                 [str(puppet_bin), "--version"],
