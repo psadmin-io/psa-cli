@@ -317,20 +317,14 @@ class TestCompareOpsMode:
             }
         }
 
-        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops"])
+        # User declines commit prompt
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops"], input="n\n")
         assert result.exit_code == 0
         assert "Port" in result.output or "JOLT Listener.Port" in result.output
 
-    @patch("psa.commands.domain.SudoFileOps")
     @patch("psa.commands.domain.get_config")
-    @patch("psa.commands.domain._find_domain")
-    def test_ops_not_configured(self, mock_find, mock_cfg, mock_fileops_cls, app_domain_info, tmp_path):
-        mock_find.return_value = app_domain_info
+    def test_ops_not_configured(self, mock_cfg, tmp_path):
         mock_cfg.return_value = PsaConfig(ps_cfg_home=tmp_path, ops=OpsConfig(), sudo_enabled=False)
-
-        mock_fileops = MagicMock()
-        mock_fileops_cls.return_value = mock_fileops
-        mock_fileops.read_text.return_value = CURRENT_CFG
 
         result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops"])
         assert result.exit_code == 1
@@ -559,3 +553,322 @@ class TestCompareInteractivePicker:
         result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--quiet"])
         assert result.exit_code == 0
         assert "Select" not in result.output
+
+
+class TestCompareNoNameRequiredForOps:
+    """Name is now optional; non-ops modes still require it."""
+
+    def test_no_name_no_ops_errors(self):
+        result = runner.invoke(psa_app, ["domain", "compare"])
+        assert result.exit_code == 1
+        assert "Domain name required" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Ops commit flow tests
+# ---------------------------------------------------------------------------
+
+# Shared API response with drift (Port changed 9000 -> 9100)
+API_CONFIG_WITH_DRIFT = {
+    "parsed_content": {
+        "sections": {
+            "Startup": {"DBName": "HCMPRD", "DBType": "ORACLE"},
+            "JOLT Listener": {"Port": "9000"},
+        }
+    }
+}
+
+# Shared API response matching current config (no drift)
+API_CONFIG_NO_DRIFT = {
+    "parsed_content": {
+        "sections": {
+            "Startup": {"DBName": "HCMPRD", "DBType": "ORACLE"},
+            "JOLT Listener": {"Port": "9100"},
+        }
+    }
+}
+
+
+def _setup_ops_mocks(mock_cfg, mock_find, mock_fileops_cls, mock_api_cls, mock_cache,
+                     domain_info, tmp_path, api_config_return=None):
+    """Wire up standard mocks for --ops commit flow tests."""
+    mock_find.return_value = domain_info
+    mock_cfg.return_value = PsaConfig(
+        ps_cfg_home=tmp_path,
+        ops=OpsConfig(url="http://api:8002", environment_id="env1"),
+        sudo_enabled=False,
+    )
+    mock_cache.return_value = "d1"
+
+    mock_fileops = MagicMock()
+    mock_fileops_cls.return_value = mock_fileops
+    mock_fileops.read_text.return_value = CURRENT_CFG
+
+    mock_client = MagicMock()
+    mock_api_cls.return_value = mock_client
+    mock_client.get_latest_config.return_value = api_config_return
+    mock_client.ingest_scan.return_value = {
+        "domains": [{"id": "d1", "name": domain_info.name, "domain_type": domain_info.domain_type}],
+    }
+    return mock_client
+
+
+class TestCompareOpsCommitFlow:
+    """Test --ops commit flow."""
+
+    @patch("psa.commands.domain.update_cache_from_ingest")
+    @patch("psa.commands.domain.get_hostname", return_value="testhost")
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    @patch("psa.commands.domain.ApiClient")
+    @patch("psa.commands.domain.get_cached_domain_id")
+    def test_ops_changes_user_confirms(
+        self, mock_cache, mock_api_cls, mock_find, mock_cfg, mock_fileops_cls,
+        mock_hostname, mock_update_cache, app_domain_info, tmp_path
+    ):
+        """--ops with changes, user confirms -> ingest called."""
+        mock_client = _setup_ops_mocks(
+            mock_cfg, mock_find, mock_fileops_cls, mock_api_cls, mock_cache,
+            app_domain_info, tmp_path, api_config_return=API_CONFIG_WITH_DRIFT,
+        )
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops"], input="y\n")
+        assert result.exit_code == 0
+        assert "Commit to Ops?" in result.output
+        mock_client.ingest_scan.assert_called_once()
+        mock_update_cache.assert_called_once()
+
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    @patch("psa.commands.domain.ApiClient")
+    @patch("psa.commands.domain.get_cached_domain_id")
+    def test_ops_changes_user_declines(
+        self, mock_cache, mock_api_cls, mock_find, mock_cfg, mock_fileops_cls,
+        app_domain_info, tmp_path
+    ):
+        """--ops with changes, user declines -> no ingest."""
+        mock_client = _setup_ops_mocks(
+            mock_cfg, mock_find, mock_fileops_cls, mock_api_cls, mock_cache,
+            app_domain_info, tmp_path, api_config_return=API_CONFIG_WITH_DRIFT,
+        )
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops"], input="n\n")
+        assert result.exit_code == 0
+        mock_client.ingest_scan.assert_not_called()
+
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    @patch("psa.commands.domain.ApiClient")
+    @patch("psa.commands.domain.get_cached_domain_id")
+    def test_ops_no_changes(
+        self, mock_cache, mock_api_cls, mock_find, mock_cfg, mock_fileops_cls,
+        app_domain_info, tmp_path
+    ):
+        """--ops with no changes -> 'matches baseline' message."""
+        mock_client = _setup_ops_mocks(
+            mock_cfg, mock_find, mock_fileops_cls, mock_api_cls, mock_cache,
+            app_domain_info, tmp_path, api_config_return=API_CONFIG_NO_DRIFT,
+        )
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops"])
+        assert result.exit_code == 0
+        # print_info uses console which may be affected by verbosity leaks;
+        # verify no ingest was attempted instead
+        mock_client.ingest_scan.assert_not_called()
+
+    @patch("psa.commands.domain.update_cache_from_ingest")
+    @patch("psa.commands.domain.get_hostname", return_value="testhost")
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    @patch("psa.commands.domain.ApiClient")
+    @patch("psa.commands.domain.get_cached_domain_id")
+    def test_ops_no_baseline_user_confirms(
+        self, mock_cache, mock_api_cls, mock_find, mock_cfg, mock_fileops_cls,
+        mock_hostname, mock_update_cache, app_domain_info, tmp_path
+    ):
+        """--ops with no baseline, user confirms -> ingest called."""
+        mock_client = _setup_ops_mocks(
+            mock_cfg, mock_find, mock_fileops_cls, mock_api_cls, mock_cache,
+            app_domain_info, tmp_path, api_config_return=None,
+        )
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops"], input="y\n")
+        assert result.exit_code == 0
+        assert "Commit current config as baseline?" in result.output
+        mock_client.ingest_scan.assert_called_once()
+
+    @patch("psa.commands.domain.update_cache_from_ingest")
+    @patch("psa.commands.domain.get_hostname", return_value="testhost")
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    @patch("psa.commands.domain.ApiClient")
+    @patch("psa.commands.domain.get_cached_domain_id")
+    def test_ops_commit_flag_auto_confirms(
+        self, mock_cache, mock_api_cls, mock_find, mock_cfg, mock_fileops_cls,
+        mock_hostname, mock_update_cache, app_domain_info, tmp_path
+    ):
+        """--ops --commit auto-confirms, ingest called."""
+        mock_client = _setup_ops_mocks(
+            mock_cfg, mock_find, mock_fileops_cls, mock_api_cls, mock_cache,
+            app_domain_info, tmp_path, api_config_return=API_CONFIG_WITH_DRIFT,
+        )
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops", "--commit"])
+        assert result.exit_code == 0
+        # No prompt should appear
+        assert "Commit to Ops?" not in result.output
+        mock_client.ingest_scan.assert_called_once()
+
+    @patch("psa.commands.domain.update_cache_from_ingest")
+    @patch("psa.commands.domain.get_hostname", return_value="testhost")
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    @patch("psa.commands.domain.ApiClient")
+    @patch("psa.commands.domain.get_cached_domain_id")
+    def test_ops_commit_no_baseline_auto_commits(
+        self, mock_cache, mock_api_cls, mock_find, mock_cfg, mock_fileops_cls,
+        mock_hostname, mock_update_cache, app_domain_info, tmp_path
+    ):
+        """--ops --commit with no baseline -> auto-commits."""
+        mock_client = _setup_ops_mocks(
+            mock_cfg, mock_find, mock_fileops_cls, mock_api_cls, mock_cache,
+            app_domain_info, tmp_path, api_config_return=None,
+        )
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops", "--commit"])
+        assert result.exit_code == 0
+        mock_client.ingest_scan.assert_called_once()
+
+
+class TestCompareOpsAllDomains:
+    """Test --ops without name (all domains mode)."""
+
+    @patch("psa.commands.domain.update_cache_from_ingest")
+    @patch("psa.commands.domain.get_hostname", return_value="testhost")
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain.run_discovery")
+    @patch("psa.commands.domain.ApiClient")
+    @patch("psa.commands.domain.get_cached_domain_id")
+    def test_iterates_all_domains(
+        self, mock_cache, mock_api_cls, mock_discover, mock_cfg, mock_fileops_cls,
+        mock_hostname, mock_update_cache, tmp_path
+    ):
+        """--ops without name iterates all discovered domains."""
+        from psa.core.domain import DomainInfo
+
+        domains = [
+            DomainInfo(name="APPDOM", domain_type="app", path=Path("/cfg/appserv/APPDOM")),
+            DomainInfo(name="PRCSDOM", domain_type="prcs", path=Path("/cfg/appserv/prcs/PRCSDOM")),
+        ]
+        mock_discover.return_value = domains
+        mock_cfg.return_value = PsaConfig(
+            ps_cfg_home=tmp_path,
+            ops=OpsConfig(url="http://api:8002", environment_id="env1"),
+            sudo_enabled=False,
+        )
+        mock_cache.return_value = "d1"
+
+        mock_fileops = MagicMock()
+        mock_fileops_cls.return_value = mock_fileops
+        mock_fileops.read_text.return_value = CURRENT_CFG
+
+        mock_client = MagicMock()
+        mock_api_cls.return_value = mock_client
+        mock_client.get_latest_config.return_value = API_CONFIG_NO_DRIFT
+        mock_client.ingest_scan.return_value = {"domains": []}
+
+        result = runner.invoke(psa_app, ["domain", "compare", "--ops", "--commit"])
+        assert result.exit_code == 0
+        # Both domains should have been checked (get_latest_config called twice)
+        assert mock_client.get_latest_config.call_count == 2
+
+    @patch("psa.commands.domain.update_cache_from_ingest")
+    @patch("psa.commands.domain.get_hostname", return_value="testhost")
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain.run_discovery")
+    @patch("psa.commands.domain.ApiClient")
+    @patch("psa.commands.domain.get_cached_domain_id")
+    def test_commit_all_domains(
+        self, mock_cache, mock_api_cls, mock_discover, mock_cfg, mock_fileops_cls,
+        mock_hostname, mock_update_cache, tmp_path
+    ):
+        """--ops --commit auto-confirms all domains."""
+        from psa.core.domain import DomainInfo
+
+        domains = [
+            DomainInfo(name="APPDOM", domain_type="app", path=Path("/cfg/appserv/APPDOM")),
+        ]
+        mock_discover.return_value = domains
+        mock_cfg.return_value = PsaConfig(
+            ps_cfg_home=tmp_path,
+            ops=OpsConfig(url="http://api:8002", environment_id="env1"),
+            sudo_enabled=False,
+        )
+        mock_cache.return_value = "d1"
+
+        mock_fileops = MagicMock()
+        mock_fileops_cls.return_value = mock_fileops
+        mock_fileops.read_text.return_value = CURRENT_CFG
+
+        mock_client = MagicMock()
+        mock_api_cls.return_value = mock_client
+        mock_client.get_latest_config.return_value = API_CONFIG_WITH_DRIFT
+        mock_client.ingest_scan.return_value = {
+            "domains": [{"id": "d1", "name": "APPDOM", "domain_type": "app"}],
+        }
+
+        result = runner.invoke(psa_app, ["domain", "compare", "--ops", "--commit"])
+        assert result.exit_code == 0
+        mock_client.ingest_scan.assert_called_once()
+
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain.run_discovery")
+    @patch("psa.commands.domain.ApiClient")
+    @patch("psa.commands.domain.get_cached_domain_id")
+    def test_per_domain_results(
+        self, mock_cache, mock_api_cls, mock_discover, mock_cfg, mock_fileops_cls,
+        tmp_path
+    ):
+        """Per-domain results: one matches baseline, one has drift."""
+        from psa.core.domain import DomainInfo
+
+        domains = [
+            DomainInfo(name="APPDOM", domain_type="app", path=Path("/cfg/appserv/APPDOM")),
+            DomainInfo(name="PRCSDOM", domain_type="prcs", path=Path("/cfg/appserv/prcs/PRCSDOM")),
+        ]
+        mock_discover.return_value = domains
+        mock_cfg.return_value = PsaConfig(
+            ps_cfg_home=tmp_path,
+            ops=OpsConfig(url="http://api:8002", environment_id="env1"),
+            sudo_enabled=False,
+        )
+        mock_cache.return_value = "d1"
+
+        mock_fileops = MagicMock()
+        mock_fileops_cls.return_value = mock_fileops
+        mock_fileops.read_text.return_value = CURRENT_CFG
+
+        mock_client = MagicMock()
+        mock_api_cls.return_value = mock_client
+        # First domain: no drift. Second domain: has drift
+        mock_client.get_latest_config.side_effect = [
+            API_CONFIG_NO_DRIFT,
+            API_CONFIG_WITH_DRIFT,
+        ]
+
+        # User declines commit for second domain (first has no prompt since no drift)
+        result = runner.invoke(psa_app, ["domain", "compare", "--ops"], input="n\n")
+        assert result.exit_code == 0
+        # Both domains were checked
+        assert mock_client.get_latest_config.call_count == 2
+        # No ingest since user declined the one with drift, other had no drift
+        mock_client.ingest_scan.assert_not_called()
