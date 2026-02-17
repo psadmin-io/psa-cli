@@ -746,6 +746,111 @@ class TestCompareOpsCommitFlow:
         mock_client.ingest_scan.assert_called_once()
 
 
+class TestCompareOpsPushCurrentConfig:
+    """Test that --ops pushes current config to API."""
+
+    @pytest.fixture
+    def app_domain_with_config(self):
+        """App domain with config_files populated."""
+        from psa.core.domain import DomainInfo
+        return DomainInfo(
+            name="TESTDOM",
+            domain_type="app",
+            path=Path("/cfg/appserv/TESTDOM"),
+            config_files=[{
+                "type": "psappsrv.cfg",
+                "path": "/cfg/appserv/TESTDOM/psappsrv.cfg",
+                "content": CURRENT_CFG,
+            }],
+        )
+
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    @patch("psa.commands.domain.ApiClient")
+    @patch("psa.commands.domain.get_cached_domain_id")
+    def test_ops_pushes_current_config(
+        self, mock_cache, mock_api_cls, mock_find, mock_cfg, mock_fileops_cls,
+        app_domain_with_config, tmp_path
+    ):
+        """--ops calls push_current_config when domain has config_files."""
+        mock_client = _setup_ops_mocks(
+            mock_cfg, mock_find, mock_fileops_cls, mock_api_cls, mock_cache,
+            app_domain_with_config, tmp_path, api_config_return=API_CONFIG_NO_DRIFT,
+        )
+        mock_client.push_current_config.return_value = {"updated": 1}
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops"])
+        assert result.exit_code == 0
+        mock_client.push_current_config.assert_called_once_with(
+            "d1", app_domain_with_config.config_files,
+        )
+
+    @patch("psa.commands.domain.update_cache_from_ingest")
+    @patch("psa.commands.domain.get_hostname", return_value="testhost")
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    @patch("psa.commands.domain.ApiClient")
+    @patch("psa.commands.domain.get_cached_domain_id")
+    def test_ops_commit_pushes_and_commits(
+        self, mock_cache, mock_api_cls, mock_find, mock_cfg, mock_fileops_cls,
+        mock_hostname, mock_update_cache, app_domain_with_config, tmp_path
+    ):
+        """--ops --commit pushes current config AND commits via ingest."""
+        mock_client = _setup_ops_mocks(
+            mock_cfg, mock_find, mock_fileops_cls, mock_api_cls, mock_cache,
+            app_domain_with_config, tmp_path, api_config_return=API_CONFIG_WITH_DRIFT,
+        )
+        mock_client.push_current_config.return_value = {"updated": 1}
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops", "--commit"])
+        assert result.exit_code == 0
+        mock_client.push_current_config.assert_called_once()
+        mock_client.ingest_scan.assert_called_once()
+
+    @patch("psa.commands.domain.print_warning")
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    @patch("psa.commands.domain.ApiClient")
+    @patch("psa.commands.domain.get_cached_domain_id")
+    def test_push_failure_warns_not_crash(
+        self, mock_cache, mock_api_cls, mock_find, mock_cfg, mock_fileops_cls,
+        mock_warn, app_domain_with_config, tmp_path
+    ):
+        """push_current_config failure prints warning, doesn't crash compare."""
+        mock_client = _setup_ops_mocks(
+            mock_cfg, mock_find, mock_fileops_cls, mock_api_cls, mock_cache,
+            app_domain_with_config, tmp_path, api_config_return=API_CONFIG_NO_DRIFT,
+        )
+        mock_client.push_current_config.side_effect = Exception("connection refused")
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops"])
+        assert result.exit_code == 0
+        # Verify warning was issued (Rich console output not captured by CliRunner)
+        mock_warn.assert_any_call("Failed to push current config for TESTDOM: connection refused")
+
+    @patch("psa.commands.domain.SudoFileOps")
+    @patch("psa.commands.domain.get_config")
+    @patch("psa.commands.domain._find_domain")
+    @patch("psa.commands.domain.ApiClient")
+    @patch("psa.commands.domain.get_cached_domain_id")
+    def test_no_config_files_skips_push(
+        self, mock_cache, mock_api_cls, mock_find, mock_cfg, mock_fileops_cls,
+        app_domain_info, tmp_path
+    ):
+        """Domain with empty config_files skips push_current_config."""
+        mock_client = _setup_ops_mocks(
+            mock_cfg, mock_find, mock_fileops_cls, mock_api_cls, mock_cache,
+            app_domain_info, tmp_path, api_config_return=API_CONFIG_NO_DRIFT,
+        )
+
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTDOM", "--ops"])
+        assert result.exit_code == 0
+        mock_client.push_current_config.assert_not_called()
+
+
 class TestCompareOpsAllDomains:
     """Test --ops without name (all domains mode)."""
 

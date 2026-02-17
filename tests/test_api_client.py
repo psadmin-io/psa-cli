@@ -120,6 +120,39 @@ class TestCompareConfigs:
         assert exc.value.status_code == 400
 
 
+class TestPushCurrentConfig:
+    @patch("urllib.request.urlopen")
+    def test_push_sends_put(self, mock_urlopen, client):
+        mock_urlopen.return_value = _mock_response({"updated": 1})
+
+        config_files = [
+            {"type": "psappsrv.cfg", "path": "/cfg/appserv/APPDOM/psappsrv.cfg", "content": "[Startup]\nDBName=HCMPRD\n"}
+        ]
+        result = client.push_current_config("d1", config_files)
+
+        assert result["updated"] == 1
+        req = mock_urlopen.call_args[0][0]
+        assert req.method == "PUT"
+        assert "/api/v1/domains/d1/current-config" in req.full_url
+        body = json.loads(req.data.decode("utf-8"))
+        assert len(body) == 1
+        assert body[0]["type"] == "psappsrv.cfg"
+
+    @patch("urllib.request.urlopen")
+    def test_push_multiple_files(self, mock_urlopen, client):
+        mock_urlopen.return_value = _mock_response({"updated": 2})
+
+        config_files = [
+            {"type": "psappsrv.cfg", "path": "/a", "content": "a"},
+            {"type": "psprcs.cfg", "path": "/b", "content": "b"},
+        ]
+        result = client.push_current_config("d1", config_files)
+        assert result["updated"] == 2
+
+        body = json.loads(mock_urlopen.call_args[0][0].data.decode("utf-8"))
+        assert len(body) == 2
+
+
 class TestGetDomainDrift:
     @patch("urllib.request.urlopen")
     def test_drift_with_type(self, mock_urlopen, client):

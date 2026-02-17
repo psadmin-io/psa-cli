@@ -486,6 +486,13 @@ def _compare_domain_ops(
     client = ApiClient(config.ops.url)
     domain_id = _resolve_api_domain_id(client, name)
 
+    # Push current config so API always has live server state
+    if domain.config_files:
+        try:
+            client.push_current_config(domain_id, domain.config_files)
+        except Exception as e:
+            print_warning(f"Failed to push current config for {name}: {e}")
+
     try:
         api_config = client.get_latest_config(domain_id, config_name)
     except ApiError as e:
