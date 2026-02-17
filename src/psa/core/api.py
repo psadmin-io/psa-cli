@@ -22,9 +22,9 @@ class ApiClient:
         self,
         method: str,
         path: str,
-        data: Optional[dict] = None,
+        data: Any = None,
         params: Optional[dict] = None,
-    ) -> dict:
+    ) -> Any:
         """Make HTTP request to PSA-OPS API."""
         url = f"{self.base_url.rstrip('/')}{path}"
 
@@ -293,6 +293,10 @@ class ApiClient:
             params={"config_type": config_type, "limit": "1"},
         )
         return configs[0] if configs else None
+
+    def push_current_config(self, domain_id: str, config_files: list[dict]) -> dict:
+        """Push current scanned config files for a domain."""
+        return self._request("PUT", f"/api/v1/domains/{domain_id}/current-config", data=config_files)
 
     def get_domain_drift(
         self,
