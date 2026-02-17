@@ -7,7 +7,7 @@ from typing import List, Optional, Set
 import typer
 from rich.table import Table
 
-from psa.core.api import ApiClient, ApiError
+from psa.core.api import ApiClient, ApiError, get_hostname
 from psa.core.compare import (
     CompareResult,
     diff_configs,
@@ -18,10 +18,10 @@ from psa.core.compare import (
     parse_config_to_flat,
     resolve_pia_config_path,
 )
-from psa.core.config import get_config
+from psa.core.config import PsaConfig, get_config
 from psa.core.discovery import run_discovery
 from psa.core.domain import DomainDiscovery, DomainInfo
-from psa.core.domain_cache import get_cached_domain_id
+from psa.core.domain_cache import get_cached_domain_id, update_cache_from_ingest
 from psa.core.fileops import SudoFileOps
 from psa.core.output import (
     Verbosity,
@@ -458,13 +458,163 @@ def _render_compare_table(
     console.print(table)
 
 
+def _compare_domain_ops(
+    domain: DomainInfo,
+    config: PsaConfig,
+    commit: bool,
+    json_output: bool,
+    config_type: Optional[str] = None,
+) -> bool:
+    """Compare a single domain against its Ops baseline and optionally commit.
+
+    Returns True on success, False on failure.
+    """
+    name = domain.name
+    config_name = config_type or get_primary_config(domain.domain_type)
+
+    # Read current local config
+    fileops = SudoFileOps(config)
+    config_path = _resolve_config_path(domain, config_name, fileops)
+    current_content = fileops.read_text(config_path)
+    if current_content is None:
+        print_error(f"Cannot read {config_path}")
+        return False
+
+    current_flat = parse_config_to_flat(current_content, config_name)
+
+    # Fetch Ops baseline
+    client = ApiClient(config.ops.url)
+    domain_id = _resolve_api_domain_id(client, name)
+
+    try:
+        api_config = client.get_latest_config(domain_id, config_name)
+    except ApiError as e:
+        print_error(f"API error for {name}: {e}")
+        return False
+
+    # Determine diff
+    if api_config:
+        parsed_content = api_config.get("parsed_content")
+        if not parsed_content:
+            print_error(f"No parsed content in API config for '{name}'")
+            return False
+        old_flat = extract_api_properties(parsed_content, config_name)
+        changes = diff_configs(old_flat, current_flat)
+    else:
+        # No baseline exists
+        old_flat = None
+        changes = None
+
+    # -- Commit flow --
+    if changes is not None and len(changes) == 0:
+        # No drift
+        if json_output:
+            data = {
+                "domain": name,
+                "config_type": config_name,
+                "has_drift": False,
+                "committed": False,
+                "changes": [],
+            }
+            console.print_json(json.dumps(data, default=str))
+        else:
+            print_info(f"{name}: config matches Ops baseline.")
+        return True
+
+    if old_flat is None:
+        # No baseline in Ops
+        if json_output:
+            auto = True
+        elif commit:
+            auto = True
+        else:
+            print_info(f"{name}: no baseline in Ops ({config_name}, {len(current_flat)} keys)")
+            auto = typer.confirm("Commit current config as baseline?", default=False)
+
+        if not auto:
+            return True  # user declined, not a failure
+    else:
+        # Changes detected -- show diff
+        if not json_output:
+            _render_compare_table(name, config_name, changes, "OPS Capture", "Current")
+
+        if json_output:
+            auto = True
+        elif commit:
+            auto = True
+        else:
+            auto = typer.confirm("Commit to Ops?", default=False)
+
+        if not auto:
+            if json_output:
+                data = {
+                    "domain": name,
+                    "config_type": config_name,
+                    "has_drift": True,
+                    "committed": False,
+                    "changes": [
+                        {
+                            "key": c.key,
+                            "old_value": c.old_value,
+                            "new_value": c.new_value,
+                            "change_type": c.change_type,
+                        }
+                        for c in changes
+                    ],
+                }
+                console.print_json(json.dumps(data, default=str))
+            return True
+
+    # Push via ingest
+    try:
+        hostname = get_hostname()
+        domain_dicts = [domain.to_dict()]
+        environment_id = config.ops.environment_id
+        result = client.ingest_scan(
+            hostname=hostname,
+            domains=domain_dicts,
+            environment_id=environment_id,
+        )
+        if result.get("domains"):
+            update_cache_from_ingest(result)
+
+        if json_output:
+            data = {
+                "domain": name,
+                "config_type": config_name,
+                "has_drift": changes is not None and len(changes) > 0,
+                "committed": True,
+                "changes": [
+                    {
+                        "key": c.key,
+                        "old_value": c.old_value,
+                        "new_value": c.new_value,
+                        "change_type": c.change_type,
+                    }
+                    for c in (changes or [])
+                ],
+            }
+            console.print_json(json.dumps(data, default=str))
+        else:
+            print_success(f"Committed {name} config to Ops")
+        return True
+    except ApiError as e:
+        print_error(f"Commit failed for {name}: {e}")
+        return False
+
+
 @app.command("compare")
 def compare(
-    name: str = typer.Argument(..., help="Domain name"),
+    name: Optional[str] = typer.Argument(None, help="Domain name (omit for all)"),
     ops: bool = typer.Option(
         False,
         "--ops",
         help="Compare current local config vs last PSA-OPS capture",
+    ),
+    commit: bool = typer.Option(
+        False,
+        "--commit",
+        help="Push changes to Ops without prompting",
     ),
     file: Optional[str] = typer.Option(
         None,
@@ -504,6 +654,8 @@ def compare(
         psa domain compare APPDOM
         psa domain compare APPDOM --latest
         psa domain compare APPDOM --ops
+        psa domain compare --ops              # all domains vs Ops
+        psa domain compare --ops --commit     # commit all without prompting
         psa domain compare APPDOM --file /path/to/old.cfg
         psa domain compare APPDOM --type psappsrv.cfg
         psa domain compare APPDOM --json
@@ -514,6 +666,31 @@ def compare(
     exclusive_count = sum([latest, ops, file is not None])
     if exclusive_count > 1:
         print_error("--latest, --ops, and --file are mutually exclusive")
+        raise typer.Exit(1)
+
+    # --ops mode: supports optional name (all domains when omitted)
+    if ops:
+        config = get_config()
+        if not config.ops.is_configured():
+            print_error("PSA-OPS not configured. Run 'psa ops setup --url <url>' first")
+            raise typer.Exit(1)
+
+        domains = _resolve_targets(name)
+        for domain in domains:
+            ok = _compare_domain_ops(
+                domain,
+                config,
+                commit=commit or json_output,
+                json_output=json_output,
+                config_type=config_type,
+            )
+            if not ok:
+                raise typer.Exit(1)
+        return
+
+    # Non-ops modes require a domain name
+    if name is None:
+        print_error("Domain name required for archive/file compare. Use --ops for all domains.")
         raise typer.Exit(1)
 
     # 1. Find domain locally
@@ -538,35 +715,7 @@ def compare(
     current_flat = parse_config_to_flat(current_content, config_name)
 
     # 4. Get comparison target
-    if ops:
-        # Compare vs last API capture
-        if not config.ops.is_configured():
-            print_error("PSA-OPS not configured. Run 'psa ops setup --url <url>' first")
-            raise typer.Exit(1)
-
-        client = ApiClient(config.ops.url)
-        domain_id = _resolve_api_domain_id(client, name)
-
-        try:
-            api_config = client.get_latest_config(domain_id, config_name)
-        except ApiError as e:
-            print_error(f"API error: {e}")
-            raise typer.Exit(1)
-
-        if not api_config:
-            print_error(f"No captured config for '{name}' ({config_name}) in PSA-OPS")
-            raise typer.Exit(1)
-
-        parsed_content = api_config.get("parsed_content")
-        if not parsed_content:
-            print_error(f"No parsed content in API config for '{name}'")
-            raise typer.Exit(1)
-
-        old_flat = extract_api_properties(parsed_content, config_name)
-        left_label = "OPS Capture"
-        right_label = "Current"
-
-    elif file:
+    if file:
         # Compare vs arbitrary file
         file_path = Path(file)
         file_content = fileops.read_text(file_path)
