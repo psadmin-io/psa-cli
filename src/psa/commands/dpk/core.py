@@ -1270,9 +1270,13 @@ def _backup_and_write(
     if existing is not None:
         if not fileops.write_text(backup, existing):
             print_error(f"Failed to back up {target} -> {backup}")
+            if getattr(fileops, "last_error", None):
+                print_info(fileops.last_error)
             return False
     if not fileops.write_text(target, content):
         print_error(f"Failed to write {target}")
+        if getattr(fileops, "last_error", None):
+            print_info(fileops.last_error)
         return False
     return True
 

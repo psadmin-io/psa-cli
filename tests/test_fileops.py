@@ -225,6 +225,40 @@ class TestWriteTextAsRunner:
         ops = SudoFileOps(sudo_config)
         assert ops.write_text(Path("/u01/cfg/file.cfg"), "x") is False
 
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_last_error_set_on_sudo_failure(self, mock_run, sudo_config):
+        """When sudo write fails, last_error captures stderr + exit code for diagnostics."""
+        mock_run.return_value = MagicMock(returncode=1, stderr="Permission denied\n")
+        ops = SudoFileOps(sudo_config)
+        assert ops.write_text(Path("/u01/cfg/file.cfg"), "x") is False
+        assert ops.last_error is not None
+        assert "exit 1" in ops.last_error
+        assert "Permission denied" in ops.last_error
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_last_error_set_on_timeout(self, mock_run, sudo_config):
+        """A timeout (typical for password prompt) sets a clear last_error."""
+        import subprocess
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="sudo", timeout=30)
+        ops = SudoFileOps(sudo_config)
+        assert ops.write_text(Path("/u01/cfg/file.cfg"), "x") is False
+        assert ops.last_error is not None
+        assert "passwordless sudo" in ops.last_error
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_last_error_cleared_on_success(self, mock_run, sudo_config):
+        """A subsequent successful write clears last_error."""
+        mock_run.return_value = MagicMock(returncode=1, stderr="boom\n")
+        ops = SudoFileOps(sudo_config)
+        ops.write_text(Path("/u01/cfg/a"), "x")
+        assert ops.last_error is not None
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        ops.write_text(Path("/u01/cfg/b"), "y")
+        assert ops.last_error is None
+
 
 class TestWriteTextAsRoot:
     """as_root=True falls back to plain sudo bash when direct write fails."""

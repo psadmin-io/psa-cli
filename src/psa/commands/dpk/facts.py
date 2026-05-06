@@ -187,10 +187,14 @@ def facts_init(
         backup = target.with_suffix(".yaml.bak")
         if not fileops.write_text(backup, existing, as_root=True):
             print_error(f"Failed to back up existing {target} -> {backup}")
+            if getattr(fileops, "last_error", None):
+                print_info(fileops.last_error)
             raise typer.Exit(1)
 
     if not fileops.write_text(target, content, as_root=True):
         print_error(f"Failed to write {target}")
+        if getattr(fileops, "last_error", None):
+            print_info(fileops.last_error)
         print_info("Ensure passwordless sudo is configured for the lab user.")
         raise typer.Exit(1)
 
@@ -232,6 +236,8 @@ def facts_set(
     content = _format_server_yaml(facts)
     if not fileops.write_text(target, content, as_root=True):
         print_error(f"Failed to write {target}")
+        if getattr(fileops, "last_error", None):
+            print_info(fileops.last_error)
         raise typer.Exit(1)
 
     print_success(f"Set {key}={value} in {target}")
