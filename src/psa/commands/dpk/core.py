@@ -13,6 +13,7 @@ import typer
 from rich.console import Console
 
 from psa.core.config import PsaConfig, get_config
+from psa.core.fileops import SudoFileOps
 from psa.core.output import print_error, print_info, print_json, print_success, print_warning
 
 console = Console()
@@ -1255,18 +1256,43 @@ def _verify_puppet(exit_on_fail: bool = True, quiet: bool = False) -> Union[bool
 # --- Helper functions for sync command ---
 
 
+def _default_fileops() -> SudoFileOps:
+    """Direct-mode SudoFileOps for callers (e.g. tests) that don't inject one."""
+    return SudoFileOps(PsaConfig(sudo_enabled=False))
+
+
+def _backup_and_write(
+    target: Path, content: str, fileops: SudoFileOps
+) -> bool:
+    """Back up `target` to .bak (if it exists) then write `content`. Sudo-aware."""
+    backup = target.with_suffix(target.suffix + ".bak")
+    existing = fileops.read_text(target)
+    if existing is not None:
+        if not fileops.write_text(backup, existing):
+            print_error(f"Failed to back up {target} -> {backup}")
+            return False
+    if not fileops.write_text(target, content):
+        print_error(f"Failed to write {target}")
+        return False
+    return True
+
+
 def _deploy_hiera_files(
     dpk_path: Path,
     dpk_cust_home: Optional[Path] = None,
     psa_kit_path: Optional[Path] = None,
     dry_run: bool = False,
     enable_psa_kit: bool = False,
+    fileops: Optional[SudoFileOps] = None,
 ) -> bool:
     """Deploy hiera.yaml to puppet directories. Returns True on success."""
     puppet_dir = dpk_path / "puppet"
     if not puppet_dir.exists():
         print_error(f"Puppet directory not found: {puppet_dir}")
         return False
+
+    if fileops is None:
+        fileops = _default_fileops()
 
     hiera_content = _generate_hiera_yaml(dpk_cust_home, psa_kit_path, enable_psa_kit)
 
@@ -1280,39 +1306,41 @@ def _deploy_hiera_files(
         if not target_dir.exists():
             continue
 
-        backup = target.with_suffix(".yaml.bak")
-
         if dry_run:
             if target.exists():
                 console.print(f"  [dim]Would backup: {target.name}[/dim]")
             console.print(f"  [dim]Would write: {target}[/dim]")
         else:
-            if target.exists():
-                shutil.copy2(target, backup)
-            target.write_text(hiera_content)
+            if not _backup_and_write(target, hiera_content, fileops):
+                return False
             print_success(f"  hiera.yaml -> {target.parent.name}/")
 
     return True
 
 
-def _deploy_site_pp(dpk_path: Path, dry_run: bool = False) -> bool:
+def _deploy_site_pp(
+    dpk_path: Path,
+    dry_run: bool = False,
+    fileops: Optional[SudoFileOps] = None,
+) -> bool:
     """Deploy site.pp to manifests directory. Returns True on success."""
     manifests_dir = dpk_path / "puppet" / "production" / "manifests"
     if not manifests_dir.exists():
         print_error(f"Manifests directory not found: {manifests_dir}")
         return False
 
+    if fileops is None:
+        fileops = _default_fileops()
+
     target = manifests_dir / "site.pp"
-    backup = target.with_suffix(".pp.bak")
 
     if dry_run:
         if target.exists():
             console.print(f"  [dim]Would backup: {target.name}[/dim]")
         console.print(f"  [dim]Would write: {target}[/dim]")
     else:
-        if target.exists():
-            shutil.copy2(target, backup)
-        target.write_text(SITE_PP_TEMPLATE)
+        if not _backup_and_write(target, SITE_PP_TEMPLATE, fileops):
+            return False
         print_success("  site.pp -> manifests/")
 
     return True
@@ -1353,6 +1381,7 @@ def _deploy_environment_conf(
     psa_kit_path: Optional[Path] = None,
     dry_run: bool = False,
     enable_psa_kit: bool = False,
+    fileops: Optional[SudoFileOps] = None,
 ) -> bool:
     """Deploy environment.conf to the production env dir. Returns True on success."""
     env_dir = dpk_path / "puppet" / "production"
@@ -1360,8 +1389,10 @@ def _deploy_environment_conf(
         print_error(f"Puppet environment directory not found: {env_dir}")
         return False
 
+    if fileops is None:
+        fileops = _default_fileops()
+
     target = env_dir / "environment.conf"
-    backup = target.with_suffix(".conf.bak")
     content = _generate_environment_conf(dpk_cust_home, psa_kit_path, dpk_path, enable_psa_kit)
 
     if dry_run:
@@ -1369,9 +1400,8 @@ def _deploy_environment_conf(
             console.print(f"  [dim]Would backup: {target.name}[/dim]")
         console.print(f"  [dim]Would write: {target}[/dim]")
     else:
-        if target.exists():
-            shutil.copy2(target, backup)
-        target.write_text(content)
+        if not _backup_and_write(target, content, fileops):
+            return False
         print_success(f"  environment.conf -> {env_dir.relative_to(dpk_path)}/")
 
     return True
@@ -1488,17 +1518,21 @@ def sync(
 
     console.print("[bold]Syncing custom DPK configuration...[/bold]")
 
+    # DPK_HOME is typically owned by runtime_user (psadm2); use sudo if needed.
+    fileops = SudoFileOps(config)
+
     # Deploy hiera.yaml
     if sync_all or do_hiera:
         if not _deploy_hiera_files(
             resolved_dpk, resolved_cust, resolved_kit, dry_run,
             enable_psa_kit=config.enable_psa_kit,
+            fileops=fileops,
         ):
             raise typer.Exit(1)
 
     # Deploy site.pp
     if sync_all or do_site:
-        if not _deploy_site_pp(resolved_dpk, dry_run):
+        if not _deploy_site_pp(resolved_dpk, dry_run, fileops=fileops):
             raise typer.Exit(1)
 
     # Deploy environment.conf
@@ -1506,6 +1540,7 @@ def sync(
         if not _deploy_environment_conf(
             resolved_dpk, resolved_cust, resolved_kit, dry_run,
             enable_psa_kit=config.enable_psa_kit,
+            fileops=fileops,
         ):
             raise typer.Exit(1)
 

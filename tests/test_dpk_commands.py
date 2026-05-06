@@ -585,3 +585,41 @@ def test_dpk_base_config_field_round_trip(tmp_path):
     cfg.save(config_path)
     loaded = PsaConfig.load(config_path)
     assert loaded.dpk_base == Path("/opt/oracle/psft")
+
+
+def test_sync_falls_back_to_sudo_when_direct_write_denied(dpk_tree, tmp_path, monkeypatch):
+    """When DPK_HOME is not writable, sync uses sudo via SudoFileOps."""
+    cust = tmp_path / "cust"
+    cust.mkdir()
+    monkeypatch.setenv("DPK_CUST_HOME", str(cust))
+    monkeypatch.delenv("PSA_KIT", raising=False)
+    monkeypatch.setenv("USER", "opc")  # not psadm2 -> _needs_sudo() True
+
+    config = PsaConfig(sudo_enabled=True, runtime_user="psadm2")
+
+    sudo_calls = []
+
+    def fake_subprocess_run(cmd, **kwargs):
+        # SudoFileOps.write_text shells out via `sudo su - <user> -c "..."`
+        sudo_calls.append(cmd)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    # Monkeypatch the path.write_text call so the direct attempt fails with
+    # PermissionError and forces the sudo fallback.
+    real_write_text = Path.write_text
+
+    def fake_write_text(self, *args, **kwargs):
+        # Fail for any write under the dpk_tree puppet/ dir
+        if "puppet" in str(self):
+            raise PermissionError(f"mock denied: {self}")
+        return real_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fake_write_text)
+
+    with patch("psa.commands.dpk.core.get_config", return_value=config), \
+         patch("psa.core.fileops.subprocess.run", side_effect=fake_subprocess_run):
+        result = runner.invoke(dpk_app, ["sync", "--dpk-home", str(dpk_tree)])
+
+    assert result.exit_code == 0, result.output
+    # At least one sudo invocation should have happened (write_text fallback)
+    assert any(c[:2] == ["sudo", "su"] for c in sudo_calls), sudo_calls
