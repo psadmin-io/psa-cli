@@ -55,10 +55,12 @@ FIRST_ZIP_PATTERNS = [
 # Environment variable names
 ENV_DPK_REPO = "DPK_REPO"
 ENV_DPK_INSTALL = "DPK_INSTALL"
-ENV_DPK_BASE = "DPK_BASE"
+ENV_DPK_BASE = "DPK_BASE"  # Parent dir, used by Oracle's DPK setup script
+ENV_DPK_HOME = "DPK_HOME"  # The DPK install dir itself, = DPK_BASE/dpk
 
 # Defaults
 DEFAULT_DPK_BASE = "/u01/app/psoft"
+DEFAULT_DPK_HOME = "/u01/app/psoft/dpk"
 
 def _generate_hiera_yaml(
     dpk_cust_home: Optional[Path],
@@ -204,16 +206,36 @@ def _read_server_facts(config: PsaConfig) -> dict:
 
 
 def _get_env_path(env_var: str, cli_value: Optional[Path]) -> Optional[Path]:
-    """Get path from CLI arg, environment variable, or default."""
+    """Get path from CLI arg, environment variable, config, or default.
+
+    For DPK_BASE: cli -> $DPK_BASE -> config.dpk_base -> DEFAULT_DPK_BASE.
+    """
     if cli_value:
         return cli_value
     env_val = os.environ.get(env_var)
     if env_val:
         return Path(env_val)
-    # Return default for DPK_BASE
     if env_var == ENV_DPK_BASE:
+        cfg = get_config()
+        if cfg.dpk_base:
+            return cfg.dpk_base
         return Path(DEFAULT_DPK_BASE)
     return None
+
+
+def _resolve_dpk_home(cli_value: Optional[Path]) -> Path:
+    """Resolve DPK_HOME (the dpk install dir).
+
+    Order: cli -> $DPK_HOME -> config.dpk_base/dpk -> DEFAULT_DPK_HOME.
+    """
+    if cli_value:
+        return cli_value.resolve()
+    if env := os.environ.get(ENV_DPK_HOME):
+        return Path(env)
+    cfg = get_config()
+    if cfg.dpk_base:
+        return cfg.dpk_base / "dpk"
+    return Path(DEFAULT_DPK_HOME)
 
 
 def _find_first_zip(directory: Path) -> Optional[Path]:
@@ -637,7 +659,7 @@ deploy_type={deploy_type.value}
             )
             if result.returncode == 0:
                 print_success("DPK setup completed successfully")
-                print_info(f"Next: psa dpk apply --dpk-path {base_path}")
+                print_info(f"Next: psa dpk apply --dpk-home {base_path / 'dpk'}")
             else:
                 print_error(f"DPK setup failed (exit {result.returncode})")
                 raise typer.Exit(1)
@@ -762,13 +784,14 @@ def status(
     else:
         puppet_ok = _verify_puppet(exit_on_fail=False)
 
-    # Check common DPK locations
+    # Check common DPK locations: env var, configured base, then well-known paths
     dpk_paths = [
-        Path(os.environ.get(ENV_DPK_BASE, DEFAULT_DPK_BASE)),
+        _get_env_path(ENV_DPK_BASE, None),
         Path("/u01/app/psoft/dpk"),
         Path("/opt/dpk"),
         Path("/home/psadm2/dpk"),
     ]
+    dpk_paths = [p for p in dpk_paths if p is not None]
 
     dpk_found = None
     for path in dpk_paths:
@@ -885,10 +908,11 @@ def apply(
         "-d",
         help="Puppet debug output",
     ),
-    dpk_path: Path = typer.Option(
+    dpk_home: Optional[Path] = typer.Option(
         None,
-        "--dpk-path",
-        help=f"Path to DPK installation (or ${ENV_DPK_BASE})",
+        "--dpk-home",
+        "-d",
+        help=f"DPK install dir (or ${ENV_DPK_HOME}, or config.dpk_base/dpk; default {DEFAULT_DPK_HOME})",
     ),
 ) -> None:
     """
@@ -904,10 +928,8 @@ def apply(
         psa dpk apply --dry-run
         psa dpk apply --debug
     """
-    # Resolve DPK path
-    resolved_path = _get_env_path(ENV_DPK_BASE, dpk_path)
-    if not resolved_path:
-        resolved_path = Path(DEFAULT_DPK_BASE)
+    # Resolve DPK_HOME (the dpk install dir)
+    resolved_path = _resolve_dpk_home(dpk_home)
 
     # Verify paths exist
     puppet_dir = resolved_path / "puppet"
@@ -1199,7 +1221,7 @@ def _verify_puppet(exit_on_fail: bool = True, quiet: bool = False) -> Union[bool
 
     When quiet=True, suppress prints and return a dict instead of bool.
     """
-    dpk_base = Path(os.environ.get(ENV_DPK_BASE, DEFAULT_DPK_BASE))
+    dpk_base = _get_env_path(ENV_DPK_BASE, None) or Path(DEFAULT_DPK_BASE)
     puppet_bin = dpk_base / "psft_puppet_agent" / "bin" / "puppet"
 
     if puppet_bin.exists():
@@ -1357,11 +1379,17 @@ def _deploy_environment_conf(
 
 @app.command("sync")
 def sync(
-    dpk_path: Optional[Path] = typer.Option(
+    dpk_home: Optional[Path] = typer.Option(
         None,
-        "--dpk-path",
+        "--dpk-home",
         "-d",
-        help=f"DPK directory (or ${ENV_DPK_BASE}/dpk)",
+        help=f"DPK install dir (or ${ENV_DPK_HOME}, or config.dpk_base/dpk; default {DEFAULT_DPK_HOME})",
+    ),
+    dpk_cust_home: Optional[Path] = typer.Option(
+        None,
+        "--dpk-cust-home",
+        "-c",
+        help="DPK_CUST_HOME (or $DPK_CUST_HOME, or config.dpk_cust_home)",
     ),
     do_hiera: bool = typer.Option(
         False,
@@ -1415,35 +1443,32 @@ def sync(
     Requires 'psa dpk init' to have been run (config.dpk_cust_home must be set).
 
     Examples:
-        psa dpk sync --dpk-path /opt/oracle/psft/dpk
+        psa dpk sync --dpk-home /opt/oracle/psft/dpk
         psa dpk sync --hiera --site
         psa dpk sync --dry-run
+        psa dpk sync --dpk-cust-home /u01/app/io/dpk-cust
     """
     # If none of the filter flags specified, sync all
     sync_all = not (do_hiera or do_site or do_environment_conf)
 
-    # Resolve DPK path
-    resolved_dpk = _get_env_path(ENV_DPK_BASE, dpk_path)
-    if not resolved_dpk:
-        resolved_dpk = Path(DEFAULT_DPK_BASE)
-
-    # Handle both /u01/app/psoft and /u01/app/psoft/dpk
-    if resolved_dpk.name != "dpk" and (resolved_dpk / "dpk").exists():
-        resolved_dpk = resolved_dpk / "dpk"
-
+    # Resolve DPK_HOME (the dpk install dir)
+    resolved_dpk = _resolve_dpk_home(dpk_home)
     if not resolved_dpk.exists():
-        print_error(f"DPK path not found: {resolved_dpk}")
+        print_error(f"DPK_HOME not found: {resolved_dpk}")
+        print_info(f"Set --dpk-home, ${ENV_DPK_HOME}, or config.dpk_base.")
         raise typer.Exit(1)
 
-    # Resolve dpk_cust_home (required) and psa_kit_path (optional, kit-only)
+    # Resolve dpk_cust_home (required): flag -> env -> config
     config = get_config()
-    resolved_cust = (
-        Path(os.environ["DPK_CUST_HOME"]) if os.environ.get("DPK_CUST_HOME")
-        else config.dpk_cust_home
-    )
+    if dpk_cust_home:
+        resolved_cust = dpk_cust_home.resolve()
+    elif env_cust := os.environ.get("DPK_CUST_HOME"):
+        resolved_cust = Path(env_cust)
+    else:
+        resolved_cust = config.dpk_cust_home
     if not resolved_cust:
         print_error("DPK_CUST_HOME not configured.")
-        print_info("Run 'psa dpk init' first, or set $DPK_CUST_HOME.")
+        print_info("Run 'psa dpk init' first, set --dpk-cust-home, or set $DPK_CUST_HOME.")
         raise typer.Exit(1)
 
     resolved_kit = (
@@ -1451,7 +1476,7 @@ def sync(
         else config.psa_kit_path
     )
 
-    print_info(f"DPK path: {resolved_dpk}")
+    print_info(f"DPK_HOME: {resolved_dpk}")
     print_info(f"DPK_CUST_HOME: {resolved_cust}")
     if resolved_kit:
         print_info(f"PSA Kit: {resolved_kit}")

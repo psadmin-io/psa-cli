@@ -29,7 +29,7 @@ app = typer.Typer(
 
 
 def _resolve_dpk_cust_home(path: Optional[Path]) -> Path:
-    """Resolve DPK_CUST_HOME: --path -> $DPK_CUST_HOME -> config -> default."""
+    """Resolve DPK_CUST_HOME: --dpk-cust-home -> $DPK_CUST_HOME -> config -> default."""
     if path:
         return path.resolve()
     if env := os.environ.get("DPK_CUST_HOME"):
@@ -57,11 +57,11 @@ def install(
         ...,
         help="One or more GitHub org/repo strings (e.g., psadmin-io/io_role)",
     ),
-    path: Optional[Path] = typer.Option(
+    dpk_cust_home: Optional[Path] = typer.Option(
         None,
-        "--path",
-        "-p",
-        help="DPK_CUST_HOME path (or $DPK_CUST_HOME)",
+        "--dpk-cust-home",
+        "-c",
+        help="DPK_CUST_HOME (or $DPK_CUST_HOME, or config.dpk_cust_home)",
     ),
     branch: str = typer.Option(
         "main",
@@ -103,7 +103,7 @@ def install(
             print_error(f"Invalid --as name: {as_name!r} (allowed: letters, digits, '_', '-', '.')")
             raise typer.Exit(1)
 
-    dpk_cust = _resolve_dpk_cust_home(path)
+    dpk_cust = _resolve_dpk_cust_home(dpk_cust_home)
     modules_dir = dpk_cust / "modules"
 
     print_info(f"Installing modules to {modules_dir}...")
@@ -210,11 +210,11 @@ def _shorten_remote(remote: Optional[str]) -> Optional[str]:
 
 @app.command("list")
 def list_modules(
-    path: Optional[Path] = typer.Option(
+    dpk_cust_home: Optional[Path] = typer.Option(
         None,
-        "--path",
-        "-p",
-        help="DPK_CUST_HOME path (or $DPK_CUST_HOME)",
+        "--dpk-cust-home",
+        "-c",
+        help="DPK_CUST_HOME (or $DPK_CUST_HOME, or config.dpk_cust_home)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -232,7 +232,7 @@ def list_modules(
         psa dpk module list
         psa dpk module list --json
     """
-    dpk_cust = _resolve_dpk_cust_home(path)
+    dpk_cust = _resolve_dpk_cust_home(dpk_cust_home)
     modules_dir = dpk_cust / "modules"
 
     if not modules_dir.exists():

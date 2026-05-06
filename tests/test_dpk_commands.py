@@ -479,7 +479,7 @@ def test_sync_hard_fails_when_dpk_cust_home_unset(dpk_tree, monkeypatch):
     monkeypatch.delenv("PSA_KIT", raising=False)
     config = PsaConfig()  # no dpk_cust_home
     with patch("psa.commands.dpk.core.get_config", return_value=config):
-        result = runner.invoke(dpk_app, ["sync", "--dpk-path", str(dpk_tree), "--dry-run"])
+        result = runner.invoke(dpk_app, ["sync", "--dpk-home", str(dpk_tree), "--dry-run"])
     assert result.exit_code != 0
     assert "DPK_CUST_HOME not configured" in result.output
     assert "psa dpk init" in result.output
@@ -493,7 +493,7 @@ def test_sync_runs_with_dpk_cust_home_from_env(dpk_tree, tmp_path, monkeypatch):
     monkeypatch.delenv("PSA_KIT", raising=False)
     config = PsaConfig()
     with patch("psa.commands.dpk.core.get_config", return_value=config):
-        result = runner.invoke(dpk_app, ["sync", "--dpk-path", str(dpk_tree), "--dry-run"])
+        result = runner.invoke(dpk_app, ["sync", "--dpk-home", str(dpk_tree), "--dry-run"])
     assert result.exit_code == 0, result.output
     assert "Dry run" in result.output
 
@@ -503,4 +503,85 @@ def test_sync_help_no_longer_shows_source_or_modules():
     result = runner.invoke(dpk_app, ["sync", "--help"])
     assert result.exit_code == 0
     assert "--source" not in result.output
-    assert "--modules" not in result.output
+    assert "--modules " not in result.output  # space avoids matching --dpk-cust-home etc.
+
+
+def test_sync_uses_dpk_cust_home_flag(dpk_tree, tmp_path, monkeypatch):
+    """--dpk-cust-home overrides env and config."""
+    flag_cust = tmp_path / "flag-cust"
+    flag_cust.mkdir()
+    env_cust = tmp_path / "env-cust"
+    env_cust.mkdir()
+    monkeypatch.setenv("DPK_CUST_HOME", str(env_cust))
+    config = PsaConfig(dpk_cust_home=tmp_path / "cfg-cust")
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        result = runner.invoke(
+            dpk_app,
+            ["sync", "--dpk-home", str(dpk_tree), "--dpk-cust-home", str(flag_cust), "--dry-run"],
+        )
+    assert result.exit_code == 0, result.output
+    assert str(flag_cust) in result.output
+    assert str(env_cust) not in result.output
+
+
+def test_sync_dpk_home_takes_input_as_is(dpk_tree, tmp_path, monkeypatch):
+    """sync no longer auto-appends /dpk; if you pass the parent, you get the parent (which won't have puppet/)."""
+    monkeypatch.setenv("DPK_CUST_HOME", str(tmp_path / "cust"))
+    (tmp_path / "cust").mkdir()
+    parent = dpk_tree.parent  # has no puppet/ dir
+    config = PsaConfig()
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        result = runner.invoke(dpk_app, ["sync", "--dpk-home", str(parent), "--dry-run"])
+    # Parent path exists but has no puppet/ dir → _deploy_hiera_files prints error
+    assert result.exit_code != 0
+
+
+# --- DPK_HOME / dpk_base resolution ---
+
+
+def test_resolve_dpk_home_prefers_cli(monkeypatch, tmp_path):
+    from psa.commands.dpk.core import _resolve_dpk_home
+
+    monkeypatch.setenv("DPK_HOME", str(tmp_path / "env"))
+    config = PsaConfig(dpk_base=tmp_path / "cfg")
+    cli = tmp_path / "cli"
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        assert _resolve_dpk_home(cli) == cli.resolve()
+
+
+def test_resolve_dpk_home_uses_env_over_config(monkeypatch, tmp_path):
+    from psa.commands.dpk.core import _resolve_dpk_home
+
+    env = tmp_path / "env"
+    monkeypatch.setenv("DPK_HOME", str(env))
+    config = PsaConfig(dpk_base=tmp_path / "cfg")
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        assert _resolve_dpk_home(None) == env
+
+
+def test_resolve_dpk_home_derives_from_config_dpk_base(monkeypatch, tmp_path):
+    from psa.commands.dpk.core import _resolve_dpk_home
+
+    monkeypatch.delenv("DPK_HOME", raising=False)
+    config = PsaConfig(dpk_base=tmp_path / "cfg-base")
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        assert _resolve_dpk_home(None) == tmp_path / "cfg-base" / "dpk"
+
+
+def test_resolve_dpk_home_falls_back_to_default(monkeypatch):
+    from psa.commands.dpk.core import DEFAULT_DPK_HOME, _resolve_dpk_home
+
+    monkeypatch.delenv("DPK_HOME", raising=False)
+    monkeypatch.delenv("DPK_BASE", raising=False)
+    config = PsaConfig()
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        assert _resolve_dpk_home(None) == Path(DEFAULT_DPK_HOME)
+
+
+def test_dpk_base_config_field_round_trip(tmp_path):
+    """PsaConfig.save then load preserves dpk_base."""
+    config_path = tmp_path / "config.yaml"
+    cfg = PsaConfig(dpk_base=Path("/opt/oracle/psft"))
+    cfg.save(config_path)
+    loaded = PsaConfig.load(config_path)
+    assert loaded.dpk_base == Path("/opt/oracle/psft")

@@ -95,6 +95,7 @@ SETTABLE_KEYS = {
     "runtime_user": ("str", "OS user for domain commands"),
     "dpk_repo_path": ("path", "Path to DPK file repository (PCM mount or local dir)"),
     "psa_kit_path": ("path", "Path to PSA Kit installation"),
+    "dpk_base": ("path", "DPK install parent dir, e.g. /u01/app/psoft (DPK_HOME = dpk_base/dpk)"),
     "dpk_cust_home": ("path", "Path to DPK customer customizations (DPK_CUST_HOME)"),
 }
 

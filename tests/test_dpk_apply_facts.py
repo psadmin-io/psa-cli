@@ -118,7 +118,7 @@ def _invoke_apply(fake_dpk, extra_args=None, config=None):
             captured["facter"] = {k: v for k, v in env.items() if k.startswith("FACTER_")}
         return MagicMock(returncode=0, stdout="", stderr="")
 
-    args = ["apply", "--dpk-path", str(dpk)]
+    args = ["apply", "--dpk-home", str(dpk)]
     if extra_args:
         args += extra_args
 

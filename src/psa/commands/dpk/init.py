@@ -7,11 +7,12 @@ from typing import Optional
 import typer
 
 from psa.commands.dpk.core import (
-    DEFAULT_DPK_BASE,
-    ENV_DPK_BASE,
+    DEFAULT_DPK_HOME,
+    ENV_DPK_HOME,
     SITE_PP_TEMPLATE,
     _generate_environment_conf,
     _generate_hiera_yaml,
+    _resolve_dpk_home,
 )
 from psa.core.config import (
     CONFIG_PATH,
@@ -28,8 +29,8 @@ from psa.core.output import (
 )
 
 
-def _resolve_target(path: Optional[Path], config: PsaConfig) -> Path:
-    """Resolve DPK_CUST_HOME: --path -> $DPK_CUST_HOME -> config -> default."""
+def _resolve_dpk_cust_home(path: Optional[Path], config: PsaConfig) -> Path:
+    """Resolve DPK_CUST_HOME: --dpk-cust-home -> $DPK_CUST_HOME -> config -> default."""
     if path:
         return path.resolve()
     if env := os.environ.get("DPK_CUST_HOME"):
@@ -37,15 +38,6 @@ def _resolve_target(path: Optional[Path], config: PsaConfig) -> Path:
     if config.dpk_cust_home:
         return config.dpk_cust_home
     return Path(DEFAULT_DPK_CUST_HOME)
-
-
-def _resolve_dpk_base(dpk_path: Optional[Path]) -> Optional[Path]:
-    """Resolve DPK base: --dpk-path -> $DPK_BASE -> default."""
-    if dpk_path:
-        return dpk_path.resolve()
-    if env := os.environ.get(ENV_DPK_BASE):
-        return Path(env)
-    return Path(DEFAULT_DPK_BASE)
 
 
 def scaffold_dpk_cust_home(target: Path, dry_run: bool = False) -> None:
@@ -141,17 +133,17 @@ def scaffold_dpk_cust_home(target: Path, dry_run: bool = False) -> None:
 
 
 def dpk_init(
-    path: Optional[Path] = typer.Option(
+    dpk_cust_home: Optional[Path] = typer.Option(
         None,
-        "--path",
-        "-p",
+        "--dpk-cust-home",
+        "-c",
         help=f"DPK_CUST_HOME path (or $DPK_CUST_HOME, default: {DEFAULT_DPK_CUST_HOME})",
     ),
-    dpk_path: Optional[Path] = typer.Option(
+    dpk_home: Optional[Path] = typer.Option(
         None,
-        "--dpk-path",
+        "--dpk-home",
         "-d",
-        help=f"DPK base path (or $DPK_BASE, default: {DEFAULT_DPK_BASE})",
+        help=f"DPK install dir (or ${ENV_DPK_HOME}, default: {DEFAULT_DPK_HOME})",
     ),
     dry_run: bool = typer.Option(
         False,
@@ -172,25 +164,21 @@ def dpk_init(
 
     Examples:
         psa dpk init
-        psa dpk init --path /u01/app/io/dpk-cust --dpk-path /u01/app/psoft
+        psa dpk init --dpk-cust-home /u01/app/io/dpk-cust --dpk-home /u01/app/psoft/dpk
         psa dpk init --dry-run
     """
     config_was_missing = not CONFIG_PATH.exists()
     config = get_config()
-    target = _resolve_target(path, config)
-    dpk_base = _resolve_dpk_base(dpk_path)
-
-    if dpk_base is None:
-        prompted = typer.prompt("DPK base path", default=DEFAULT_DPK_BASE)
-        dpk_base = Path(prompted)
+    target = _resolve_dpk_cust_home(dpk_cust_home, config)
+    resolved_dpk_home = _resolve_dpk_home(dpk_home)
 
     print_info(f"DPK_CUST_HOME: {target}")
-    print_info(f"DPK base: {dpk_base}")
+    print_info(f"DPK_HOME: {resolved_dpk_home}")
 
     # Refuse to overwrite a non-empty target
     if target.exists() and any(target.iterdir()):
         print_error(f"Destination not empty: {target}")
-        print_info("Remove existing files or choose a different --path")
+        print_info("Remove existing files or choose a different --dpk-cust-home")
         raise typer.Exit(1)
 
     if dry_run:
@@ -213,7 +201,7 @@ def dpk_init(
     # Generate environment.conf
     env_conf_path = target / "environment.conf"
     env_conf_content = _generate_environment_conf(
-        target, None, dpk_base, enable_psa_kit=config.enable_psa_kit
+        target, None, resolved_dpk_home, enable_psa_kit=config.enable_psa_kit
     )
     if dry_run:
         console.print(f"  [dim]Would write: {env_conf_path}[/dim]")
@@ -242,4 +230,4 @@ def dpk_init(
         print_info(f"Saved dpk_cust_home in {CONFIG_PATH}")
 
     print_success("DPK_CUST_HOME scaffolded")
-    print_info(f"Next: clone modules into {target / 'modules'} then run 'psa dpk sync --dpk-path {dpk_base}'")
+    print_info(f"Next: clone modules into {target / 'modules'} then run 'psa dpk sync --dpk-home {resolved_dpk_home}'")

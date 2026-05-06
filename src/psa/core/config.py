@@ -48,6 +48,7 @@ class PsaConfig:
     ps_base: Path = field(default_factory=lambda: Path(DEFAULT_PS_BASE))
     io_base: Path = field(default_factory=lambda: Path(DEFAULT_IO_BASE))
     psa_kit_path: Optional[Path] = None
+    dpk_base: Optional[Path] = None  # DPK install parent dir; dpk_home is dpk_base/dpk
     dpk_cust_home: Optional[Path] = None
     ps_cfg_home: Optional[Path] = None
     ps_home: Optional[Path] = None
@@ -90,6 +91,9 @@ class PsaConfig:
         if psa_kit := os.environ.get("PSA_KIT"):
             config.psa_kit_path = Path(psa_kit)
 
+        if dpk_base := os.environ.get("DPK_BASE"):
+            config.dpk_base = Path(dpk_base)
+
         if dpk_cust := os.environ.get("DPK_CUST_HOME"):
             config.dpk_cust_home = Path(dpk_cust)
 
@@ -131,6 +135,8 @@ class PsaConfig:
                     config.ps_cust_home = Path(ps_cust_home)
                 if psa_kit_path := data.get("psa_kit_path"):
                     config.psa_kit_path = Path(psa_kit_path)
+                if dpk_base := data.get("dpk_base"):
+                    config.dpk_base = Path(dpk_base)
                 if dpk_cust_home := data.get("dpk_cust_home"):
                     config.dpk_cust_home = Path(dpk_cust_home)
                 if runtime_user := data.get("runtime_user", data.get("domain_user")):
@@ -198,6 +204,8 @@ class PsaConfig:
             data["ps_cust_home"] = str(self.ps_cust_home)
         if self.psa_kit_path:
             data["psa_kit_path"] = str(self.psa_kit_path)
+        if self.dpk_base:
+            data["dpk_base"] = str(self.dpk_base)
         if self.dpk_cust_home:
             data["dpk_cust_home"] = str(self.dpk_cust_home)
         if self.runtime_user != "psadm2":

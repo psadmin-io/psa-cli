@@ -73,6 +73,9 @@ domain_user: psadm2
 
 - `PS_CFG_HOME` - PeopleSoft config home path
 - `PS_HOME` - PeopleSoft home path
+- `DPK_BASE` - DPK install parent dir (e.g. `/u01/app/psoft`); used by `psa dpk setup` / `cleanup` / `status`
+- `DPK_HOME` - DPK install dir, conventionally `$DPK_BASE/dpk`; used by `psa dpk sync` / `apply` / `init`
+- `DPK_CUST_HOME` - Customer DPK customizations dir; used by `psa dpk init` / `module install` / `sync`
 
 ## License
 

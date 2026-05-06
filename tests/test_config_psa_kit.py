@@ -23,6 +23,14 @@ def test_dpk_cust_home_env_loads(monkeypatch, tmp_path):
     assert config.dpk_cust_home == cust_path
 
 
+def test_dpk_base_env_loads(monkeypatch, tmp_path):
+    """DPK_BASE env var loads into config.dpk_base."""
+    base_path = tmp_path / "psft"
+    monkeypatch.setenv("DPK_BASE", str(base_path))
+    config = PsaConfig.from_environment()
+    assert config.dpk_base == base_path
+
+
 def test_psa_kit_yaml_loads(tmp_path):
     """psa_kit_path in YAML loads correctly."""
     kit_path = tmp_path / "kit"

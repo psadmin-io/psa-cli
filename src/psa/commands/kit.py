@@ -193,7 +193,7 @@ def kit_install(
     config.save()
 
     print_success("Kit installation complete")
-    print_info("Next: psa dpk sync --dpk-path <path>")
+    print_info("Next: psa dpk sync --dpk-home <path>")
 
 
 @app.command("update")

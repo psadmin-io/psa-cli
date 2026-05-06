@@ -91,7 +91,7 @@ def test_init_creates_config_when_missing(tmp_path, monkeypatch):
 
     target = tmp_path / "cust"
     result = runner.invoke(
-        dpk_app, ["init", "--path", str(target), "--dpk-path", str(tmp_path / "dpk")]
+        dpk_app, ["init", "--dpk-cust-home", str(target), "--dpk-home", str(tmp_path / "dpk")]
     )
     assert result.exit_code == 0, result.output
     assert config_path.exists()
@@ -112,7 +112,7 @@ def test_init_refuses_non_empty_target(tmp_path, monkeypatch):
     config = PsaConfig()
     with patch("psa.commands.dpk.init.get_config", return_value=config):
         result = runner.invoke(
-            dpk_app, ["init", "--path", str(target), "--dpk-path", str(tmp_path / "dpk")]
+            dpk_app, ["init", "--dpk-cust-home", str(target), "--dpk-home", str(tmp_path / "dpk")]
         )
     assert result.exit_code != 0
     assert "not empty" in result.output.lower()
@@ -132,7 +132,7 @@ def test_init_creates_full_scaffold(tmp_path, monkeypatch):
 
     with patch("psa.commands.dpk.init.get_config", return_value=config):
         result = runner.invoke(
-            dpk_app, ["init", "--path", str(target), "--dpk-path", str(dpk)]
+            dpk_app, ["init", "--dpk-cust-home", str(target), "--dpk-home", str(dpk)]
         )
 
     assert result.exit_code == 0, result.output
@@ -166,7 +166,7 @@ def test_init_dry_run(tmp_path, monkeypatch):
     with patch("psa.commands.dpk.init.get_config", return_value=config):
         result = runner.invoke(
             dpk_app,
-            ["init", "--path", str(target), "--dpk-path", str(tmp_path / "dpk"), "--dry-run"],
+            ["init", "--dpk-cust-home", str(target), "--dpk-home", str(tmp_path / "dpk"), "--dry-run"],
         )
 
     assert result.exit_code == 0

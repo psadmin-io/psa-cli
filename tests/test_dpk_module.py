@@ -100,7 +100,7 @@ def test_install_clones_module(tmp_path, monkeypatch):
     with patch("psa.commands.dpk.module.get_config", return_value=config):
         result = runner.invoke(
             dpk_app,
-            ["module", "install", "psadmin-io/io_role", "--path", str(tmp_path / "cust")],
+            ["module", "install", "psadmin-io/io_role", "--dpk-cust-home", str(tmp_path / "cust")],
         )
     assert result.exit_code == 0, result.output
     fake_clone.assert_called_once()
@@ -123,7 +123,7 @@ def test_install_branch_override(tmp_path, monkeypatch):
     with patch("psa.commands.dpk.module.get_config", return_value=PsaConfig()):
         runner.invoke(
             dpk_app,
-            ["module", "install", "foo/bar", "--branch", "develop", "--path", str(tmp_path / "c")],
+            ["module", "install", "foo/bar", "--branch", "develop", "--dpk-cust-home", str(tmp_path / "c")],
         )
     args = fake_clone.call_args[0][0]
     assert "develop" in args
@@ -137,7 +137,7 @@ def test_install_dry_run(tmp_path, monkeypatch):
     with patch("psa.commands.dpk.module.get_config", return_value=PsaConfig()):
         result = runner.invoke(
             dpk_app,
-            ["module", "install", "foo/bar", "--dry-run", "--path", str(tmp_path / "c")],
+            ["module", "install", "foo/bar", "--dry-run", "--dpk-cust-home", str(tmp_path / "c")],
         )
     assert result.exit_code == 0
     fake_clone.assert_not_called()
@@ -158,7 +158,7 @@ def test_install_skips_existing(tmp_path, monkeypatch):
     with patch("psa.commands.dpk.module.get_config", return_value=PsaConfig()):
         result = runner.invoke(
             dpk_app,
-            ["module", "install", "psadmin-io/io_role", "--path", str(cust)],
+            ["module", "install", "psadmin-io/io_role", "--dpk-cust-home", str(cust)],
         )
     assert result.exit_code == 0
     fake_clone.assert_not_called()
@@ -174,7 +174,7 @@ def test_install_invalid_repo_format(tmp_path, monkeypatch):
     with patch("psa.commands.dpk.module.get_config", return_value=PsaConfig()):
         result = runner.invoke(
             dpk_app,
-            ["module", "install", "bogus", "--path", str(tmp_path / "c")],
+            ["module", "install", "bogus", "--dpk-cust-home", str(tmp_path / "c")],
         )
     assert result.exit_code != 0
     fake_clone.assert_not_called()
@@ -193,7 +193,7 @@ def test_install_as_overrides_target_dir(tmp_path, monkeypatch):
             [
                 "module", "install", "puppetlabs/puppetlabs-inifile",
                 "--as", "inifile",
-                "--path", str(tmp_path / "cust"),
+                "--dpk-cust-home", str(tmp_path / "cust"),
             ],
         )
     assert result.exit_code == 0, result.output
@@ -217,7 +217,7 @@ def test_install_as_rejects_multiple_repos(tmp_path, monkeypatch):
             [
                 "module", "install", "foo/a", "foo/b",
                 "--as", "shared",
-                "--path", str(tmp_path / "c"),
+                "--dpk-cust-home", str(tmp_path / "c"),
             ],
         )
     assert result.exit_code != 0
@@ -237,7 +237,7 @@ def test_install_as_rejects_bad_name(tmp_path, monkeypatch):
             [
                 "module", "install", "foo/bar",
                 "--as", "../etc",
-                "--path", str(tmp_path / "c"),
+                "--dpk-cust-home", str(tmp_path / "c"),
             ],
         )
     assert result.exit_code != 0
@@ -254,7 +254,7 @@ def test_install_clone_failure_cleans_up(tmp_path, monkeypatch):
     with patch("psa.commands.dpk.module.get_config", return_value=PsaConfig()):
         result = runner.invoke(
             dpk_app,
-            ["module", "install", "ghost/repo", "--path", str(cust)],
+            ["module", "install", "ghost/repo", "--dpk-cust-home", str(cust)],
         )
     assert result.exit_code != 0
     assert "1 failed" in result.output
@@ -277,7 +277,7 @@ def test_install_multiple_repos_mixed(tmp_path, monkeypatch):
                 "module", "install",
                 "psadmin-io/io_role",
                 "psadmin-io/io_portalwar",
-                "--path", str(cust),
+                "--dpk-cust-home", str(cust),
             ],
         )
     assert result.exit_code == 0
@@ -294,7 +294,7 @@ def test_list_empty(tmp_path, monkeypatch):
     (cust / "modules").mkdir(parents=True)
 
     with patch("psa.commands.dpk.module.get_config", return_value=PsaConfig()):
-        result = runner.invoke(dpk_app, ["module", "list", "--path", str(cust)])
+        result = runner.invoke(dpk_app, ["module", "list", "--dpk-cust-home", str(cust)])
     assert result.exit_code == 0
     assert "No modules found" in result.output
 
@@ -316,7 +316,7 @@ def test_list_human(tmp_path, monkeypatch):
     )
 
     with patch("psa.commands.dpk.module.get_config", return_value=PsaConfig()):
-        result = runner.invoke(dpk_app, ["module", "list", "--path", str(cust)])
+        result = runner.invoke(dpk_app, ["module", "list", "--dpk-cust-home", str(cust)])
     assert result.exit_code == 0
     assert "io_role" in result.output
     assert "psadmin-io/io_role" in result.output
@@ -341,7 +341,7 @@ def test_list_json(tmp_path, monkeypatch):
     )
 
     with patch("psa.commands.dpk.module.get_config", return_value=PsaConfig()):
-        result = runner.invoke(dpk_app, ["module", "list", "--path", str(cust), "--json"])
+        result = runner.invoke(dpk_app, ["module", "list", "--dpk-cust-home", str(cust), "--json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["path"].endswith("/modules")
@@ -364,7 +364,7 @@ def test_list_missing_dir(tmp_path, monkeypatch):
     cust = tmp_path / "cust"  # not created
 
     with patch("psa.commands.dpk.module.get_config", return_value=PsaConfig()):
-        result = runner.invoke(dpk_app, ["module", "list", "--path", str(cust), "--json"])
+        result = runner.invoke(dpk_app, ["module", "list", "--dpk-cust-home", str(cust), "--json"])
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["modules"] == []
