@@ -11,6 +11,7 @@ from psa.commands.dpk.core import (
     status,
     sync,
 )
+from psa.commands.dpk.init import dpk_init
 
 # Import subcommands
 from psa.commands.dpk import data
@@ -26,6 +27,7 @@ app = typer.Typer(
 # Add core commands directly to dpk (alphabetized)
 app.command("apply")(apply)
 app.command("cleanup")(cleanup)
+app.command("init")(dpk_init)
 app.command("setup")(setup)
 app.command("stage")(stage)
 app.command("status")(status)

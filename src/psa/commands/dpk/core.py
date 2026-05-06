@@ -69,7 +69,7 @@ def _generate_hiera_yaml(
 
     # --- Customer layer (absolute datadir) ---
     if dpk_cust_home:
-        cust_datadir = str(dpk_cust_home / "dpk" / "puppet" / "production" / "data")
+        cust_datadir = str(dpk_cust_home / "data")
         lines += [
             f'  - name: "Per-domain customizations"',
             f'    datadir: "{cust_datadir}"',
@@ -1192,21 +1192,22 @@ def _deploy_site_pp(dpk_path: Path, dry_run: bool = False) -> bool:
     return True
 
 
-def _generate_puppet_conf(
+def _generate_environment_conf(
     dpk_cust_home: Optional[Path],
     psa_kit_path: Optional[Path],
     dpk_base_path: Path,
     enable_psa_kit: bool = False,
 ) -> str:
-    """Generate puppet.conf modulepath: DPK_CUST_HOME:[KIT]:DPK modules.
+    """Generate environment.conf for the production Puppet directory environment.
 
-    Kit segment is only included when enable_psa_kit=True.
+    modulepath: DPK_CUST_HOME/modules : [KIT modules :] DPK/puppet/production/modules
+    Kit segment only when enable_psa_kit=True.
     """
     dpk_modules = str(dpk_base_path / "puppet" / "production" / "modules")
 
     parts = []
     if dpk_cust_home:
-        parts.append(str(dpk_cust_home / "dpk" / "puppet" / "production" / "modules"))
+        parts.append(str(dpk_cust_home / "modules"))
     if enable_psa_kit and psa_kit_path:
         parts.append(str(psa_kit_path / "dpk" / "puppet" / "production" / "modules"))
     parts.append(dpk_modules)
@@ -1214,35 +1215,28 @@ def _generate_puppet_conf(
     modulepath = ":".join(parts)
 
     return (
-        "[main]\n"
-        f"  environmentpath = {dpk_base_path / 'puppet'}\n"
-        f"  confdir = {dpk_base_path / 'puppet'}\n"
-        "\n"
-        "[agent]\n"
-        f"  environment = production\n"
-        "\n"
-        "[user]\n"
-        f"  environment = production\n"
-        f"  modulepath = {modulepath}\n"
+        f"modulepath = {modulepath}\n"
+        "manifest = manifests/site.pp\n"
+        "environment_timeout = unlimited\n"
     )
 
 
-def _deploy_puppet_conf(
+def _deploy_environment_conf(
     dpk_path: Path,
     dpk_cust_home: Optional[Path] = None,
     psa_kit_path: Optional[Path] = None,
     dry_run: bool = False,
     enable_psa_kit: bool = False,
 ) -> bool:
-    """Deploy puppet.conf to puppet directory. Returns True on success."""
-    puppet_dir = dpk_path / "puppet"
-    if not puppet_dir.exists():
-        print_error(f"Puppet directory not found: {puppet_dir}")
+    """Deploy environment.conf to the production env dir. Returns True on success."""
+    env_dir = dpk_path / "puppet" / "production"
+    if not env_dir.exists():
+        print_error(f"Puppet environment directory not found: {env_dir}")
         return False
 
-    target = puppet_dir / "puppet.conf"
+    target = env_dir / "environment.conf"
     backup = target.with_suffix(".conf.bak")
-    content = _generate_puppet_conf(dpk_cust_home, psa_kit_path, dpk_path, enable_psa_kit)
+    content = _generate_environment_conf(dpk_cust_home, psa_kit_path, dpk_path, enable_psa_kit)
 
     if dry_run:
         if target.exists():
@@ -1252,7 +1246,7 @@ def _deploy_puppet_conf(
         if target.exists():
             shutil.copy2(target, backup)
         target.write_text(content)
-        print_success(f"  puppet.conf -> {puppet_dir.name}/")
+        print_success(f"  environment.conf -> {env_dir.relative_to(dpk_path)}/")
 
     return True
 
@@ -1332,10 +1326,10 @@ def sync(
         "--modules",
         help="Sync custom modules only (default: sync all)",
     ),
-    do_puppet_conf: bool = typer.Option(
+    do_environment_conf: bool = typer.Option(
         False,
-        "--puppet-conf",
-        help="Sync puppet.conf only (default: sync all)",
+        "--environment-conf",
+        help="Sync environment.conf only (default: sync all)",
     ),
     sync_data: bool = typer.Option(
         False,
@@ -1367,8 +1361,8 @@ def sync(
     """
     Sync custom DPK files to local installation
 
-    Deploys hiera.yaml, site.pp, puppet.conf, and io_* modules in one command.
-    Use --hiera, --site, --puppet-conf, or --modules to sync only specific components.
+    Deploys hiera.yaml, site.pp, environment.conf, and io_* modules in one command.
+    Use --hiera, --site, --environment-conf, or --modules to sync only specific components.
 
     Examples:
         psa dpk sync --dpk-path /opt/oracle/psft/dpk
@@ -1376,7 +1370,7 @@ def sync(
         psa dpk sync --dry-run
     """
     # If none of the filter flags specified, sync all
-    sync_all = not (do_hiera or do_site or do_modules or do_puppet_conf)
+    sync_all = not (do_hiera or do_site or do_modules or do_environment_conf)
 
     # Resolve DPK path
     resolved_dpk = _get_env_path(ENV_DPK_BASE, dpk_path)
@@ -1397,7 +1391,7 @@ def sync(
         print_error(f"Source path not found: {resolved_source}")
         raise typer.Exit(1)
 
-    # Resolve dpk_cust_home and psa_kit_path for hiera/puppet.conf generation
+    # Resolve dpk_cust_home and psa_kit_path for hiera/environment.conf generation
     config = get_config()
     resolved_cust = (
         Path(os.environ["DPK_CUST_HOME"]) if os.environ.get("DPK_CUST_HOME")
@@ -1435,9 +1429,9 @@ def sync(
         if not _deploy_site_pp(resolved_dpk, dry_run):
             raise typer.Exit(1)
 
-    # Deploy puppet.conf
-    if sync_all or do_puppet_conf:
-        if not _deploy_puppet_conf(
+    # Deploy environment.conf
+    if sync_all or do_environment_conf:
+        if not _deploy_environment_conf(
             resolved_dpk, resolved_cust, resolved_kit, dry_run,
             enable_psa_kit=config.enable_psa_kit,
         ):
