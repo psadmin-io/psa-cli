@@ -2,6 +2,16 @@
 
 psadmin.io CLI - a unified command-line tool for managing PeopleSoft domains.
 
+## Prerequisites
+
+psa-cli requires Python 3.9+.
+
+```bash
+sudo dnf install python3.9
+```
+
+You may also be able to use the Python shipped with the PeopleSoft DPK or `$PS_HOME/python`.
+
 ## Installation
 
 ```bash
