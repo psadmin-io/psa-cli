@@ -5,6 +5,21 @@ from pathlib import Path
 import pytest
 
 from psa.core.config import OpsConfig, PsaConfig
+from psa.core.output import Verbosity, set_verbosity
+
+
+@pytest.fixture(autouse=True)
+def _reset_verbosity():
+    """Reset module-global verbosity before/after each test.
+
+    psa.core.output holds verbosity in a module-global. Tests that invoke CLI
+    commands with --quiet (or call set_verbosity directly) leave it stuck at
+    QUIET, which silently suppresses print_info in subsequent tests and breaks
+    output-dependent assertions.
+    """
+    set_verbosity(Verbosity.DEFAULT)
+    yield
+    set_verbosity(Verbosity.DEFAULT)
 
 
 # --- Sample config file content ---
