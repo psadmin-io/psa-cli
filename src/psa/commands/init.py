@@ -180,8 +180,6 @@ def _init_standalone_mode(
     console.print("  [cyan]psa domain list[/cyan]   List domains")
     console.print("  [cyan]psa domain status[/cyan] Check domain status")
     console.print("  [cyan]psa domain start[/cyan]  Start a domain")
-    console.print("\nTo connect to PSA-OPS later:")
-    console.print("  [cyan]psa ops setup --url http://ops:8000[/cyan]")
 
 
 def _init_ops_mode(
@@ -371,7 +369,3 @@ def _init_ops_mode(
     console.print(
         f"[green]✓[/green] Facts: pillar={pillar_str}, tier={tier_str}, zone={zone_str}, role={ps_role}"
     )
-
-    console.print("\nYou can now use:")
-    console.print("  [cyan]psa ops report[/cyan]    Report domains to PSA-OPS")
-    console.print("  [cyan]psa ops status[/cyan]    Check connection status")
