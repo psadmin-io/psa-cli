@@ -227,12 +227,14 @@ class TestWriteTextAsRunner:
 
 
 class TestWriteTextAsRoot:
-    """as_root=True elevates via plain sudo (not sudo su -)."""
+    """as_root=True falls back to plain sudo bash when direct write fails."""
 
     @patch("psa.core.fileops.subprocess.run")
-    def test_uses_sudo_bash(self, mock_run, direct_config):
+    def test_falls_back_to_sudo_bash_on_permission_error(self, mock_run, direct_config):
+        """When direct write fails (e.g., root-owned path), retry via sudo bash."""
         mock_run.return_value = MagicMock(returncode=0)
         ops = SudoFileOps(direct_config)
+        # /etc/facter/... is not writable by the test user — direct fails, sudo runs.
         ok = ops.write_text(Path("/etc/facter/facts.d/server.yaml"), "ps_role: mid\n", as_root=True)
         assert ok is True
         cmd = mock_run.call_args[0][0]
@@ -242,25 +244,25 @@ class TestWriteTextAsRoot:
         assert "base64 -d > /etc/facter/facts.d/server.yaml" in inner
 
     @patch("psa.core.fileops.subprocess.run")
-    def test_as_root_overrides_direct_mode(self, mock_run, direct_config, tmp_path):
-        """Even with sudo_enabled=False, as_root=True still runs sudo."""
+    def test_skips_sudo_when_direct_succeeds(self, mock_run, direct_config, tmp_path):
+        """When direct write works (writable tmp path), don't invoke sudo."""
         mock_run.return_value = MagicMock(returncode=0)
         ops = SudoFileOps(direct_config)
         target = tmp_path / "out.yaml"
-        ops.write_text(target, "x", as_root=True)
-        # Should have invoked sudo, not just written via pathlib
-        mock_run.assert_called_once()
-        # File should NOT exist (because we mocked out the actual run)
-        assert not target.exists()
+        ok = ops.write_text(target, "x", as_root=True)
+        assert ok is True
+        mock_run.assert_not_called()
+        assert target.read_text() == "x"
 
     @patch("psa.core.fileops.subprocess.run")
     def test_base64_encodes_content(self, mock_run, direct_config):
-        """Special chars in content survive via base64."""
+        """Special chars in content survive via base64 over the sudo path."""
         import base64
         mock_run.return_value = MagicMock(returncode=0)
         ops = SudoFileOps(direct_config)
+        # Use a path that direct-write can't touch so we hit the sudo branch.
         content = "a: 'quote'\nb: \"double\"\n# comment with `backticks` and $vars\n"
-        ops.write_text(Path("/tmp/x.yaml"), content, as_root=True)
+        ops.write_text(Path("/etc/facter/facts.d/x.yaml"), content, as_root=True)
         inner = mock_run.call_args[0][0][3]
         # Extract the base64 chunk between "echo " and " | base64 -d"
         b64 = inner.split("echo ", 1)[1].split(" | ", 1)[0]

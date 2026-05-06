@@ -98,17 +98,23 @@ class SudoFileOps:
     def write_text(self, path: Path, content: str, *, as_root: bool = False) -> bool:
         """Write text to a file. Returns True on success.
 
-        When as_root=True, elevates via plain `sudo bash -c` (not `sudo su -`),
-        needed for paths owned by root such as Puppet's facts.d/.
-        Content is base64-encoded over the wire to avoid shell-escaping pitfalls.
+        Tries a direct write first. If that fails with a permission error, falls
+        back to sudo: as `sudo su - <runtime_user>` by default, or as
+        `sudo bash -c` when as_root=True (needed for root-owned paths such as
+        Puppet's facts.d/). Content is base64-encoded over the wire to avoid
+        shell-escaping pitfalls.
         """
-        if not as_root and not self._needs_sudo():
+        # Try direct write first when we don't already know sudo is required.
+        if as_root or not self._needs_sudo():
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content, encoding="utf-8")
                 return True
             except (PermissionError, OSError):
-                return False
+                if not as_root and not self._needs_sudo():
+                    # No elevation requested and direct failed — give up.
+                    return False
+                # Fall through to sudo path
 
         b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
         inner = f"mkdir -p {path.parent} && echo {b64} | base64 -d > {path}"
