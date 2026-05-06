@@ -12,7 +12,7 @@ from typing import Optional, Union
 import typer
 from rich.console import Console
 
-from psa.core.config import get_config
+from psa.core.config import PsaConfig, get_config
 from psa.core.output import print_error, print_info, print_json, print_success, print_warning
 
 console = Console()
@@ -160,6 +160,36 @@ app = typer.Typer(
     help="Manage DPK lifecycle",
     no_args_is_help=True,
 )
+
+
+def _read_server_facts(dpk_base: Path, config: PsaConfig) -> dict:
+    """Read facts from <facts.d>/server.yaml. Empty dict if missing or unreadable.
+
+    Tries both `<dpk_base>/psft_puppet_agent/...` and `<dpk_base>.parent/psft_puppet_agent/...`
+    so it works whether the caller passes the install root or the dpk/ subdir.
+    Also falls back to system-wide /opt/puppetlabs and /etc/facter locations.
+    """
+    import yaml as _yaml
+
+    from psa.core.fileops import SudoFileOps
+
+    candidates = [
+        dpk_base / "psft_puppet_agent" / "facter" / "facts.d" / "server.yaml",
+        dpk_base.parent / "psft_puppet_agent" / "facter" / "facts.d" / "server.yaml",
+        Path("/opt/puppetlabs/facter/facts.d/server.yaml"),
+        Path("/etc/facter/facts.d/server.yaml"),
+    ]
+    fileops = SudoFileOps(config)
+    for candidate in candidates:
+        content = fileops.read_text(candidate)
+        if content is None:
+            continue
+        try:
+            data = _yaml.safe_load(content)
+        except _yaml.YAMLError:
+            return {}
+        return data if isinstance(data, dict) else {}
+    return {}
 
 
 def _get_env_path(env_var: str, cli_value: Optional[Path]) -> Optional[Path]:
@@ -919,50 +949,70 @@ def apply(
     if debug:
         cmd.append("--debug")
 
-    # Load config for defaults
+    # Load config and read server.yaml (Facter external facts).
     config = get_config()
     ops = config.ops
+    server_facts = _read_server_facts(resolved_path, config)
 
-    # Apply config defaults for unspecified options
+    # Capture which CLI flags were explicitly set before defaults are applied.
+    cli_provided = {
+        "env": env is not None,
+        "ps_tier": tier is not None,
+        "ps_pillar": pillar is not None,
+        "ps_zone": zone is not None,
+        "ps_role": role is not None,
+    }
+
+    # Apply config defaults only when neither CLI flag nor server.yaml supplies the fact.
     defaulted = []
-    if not env and ops.environment_name:
+    if not env and "env" not in server_facts and ops.environment_name:
         env = ops.environment_name
         defaulted.append(f"env={env}")
-    if not tier and ops.tier:
+    if not tier and "ps_tier" not in server_facts and ops.tier:
         tier = ops.tier
         defaulted.append(f"tier={tier}")
-    if not pillar and ops.pillar:
+    if not pillar and "ps_pillar" not in server_facts and ops.pillar:
         pillar = ops.pillar
         defaulted.append(f"pillar={pillar}")
-    if not zone and ops.zone:
+    if not zone and "ps_zone" not in server_facts and ops.zone:
         zone = ops.zone
         defaulted.append(f"zone={zone}")
-    if not role and ops.ps_role:
+    if not role and "ps_role" not in server_facts and ops.ps_role:
         role = ops.ps_role
         defaulted.append(f"role={role}")
 
-    # Show warning for defaulted values (print_warning is verbosity-aware)
     if defaulted and not ops.suppress_fact_warnings:
         print_warning(f"Using config defaults: {', '.join(defaulted)}")
 
-    # Build Facter environment variables
+    # Inform user which facts will come from server.yaml (Facter reads them directly).
+    server_provided = [k for k in ("ps_role", "env", "ps_tier", "ps_zone", "ps_pillar") if k in server_facts]
+    if server_provided:
+        print_info(f"Reading from server.yaml: {', '.join(server_provided)}")
+
+    # Build Facter environment variables.
+    # Only set FACTER_* for CLI overrides or config-default fallbacks. When the
+    # fact is supplied by server.yaml and no override is given, leave FACTER_*
+    # unset so Facter reads server.yaml directly.
     facter_env = os.environ.copy()
 
-    if env:
-        facter_env["FACTER_env"] = env
-        print_info(f"Setting fact: env={env}")
-    if tier:
-        facter_env["FACTER_ps_tier"] = tier
-        print_info(f"Setting fact: ps_tier={tier}")
-    if pillar:
-        facter_env["FACTER_ps_pillar"] = pillar
-        print_info(f"Setting fact: ps_pillar={pillar}")
-    if zone:
-        facter_env["FACTER_ps_zone"] = zone
-        print_info(f"Setting fact: ps_zone={zone}")
-    if role:
-        facter_env["FACTER_ps_role"] = role
-        print_info(f"Setting fact: ps_role={role}")
+    def _set_facter(fact: str, value: Optional[str]) -> None:
+        if not value:
+            return
+        # Skip if the value will come from server.yaml (no CLI flag, no config default).
+        if (
+            not cli_provided.get(fact, False)
+            and fact in server_facts
+            and value == server_facts.get(fact)
+        ):
+            return
+        facter_env[f"FACTER_{fact}"] = value
+        print_info(f"Setting fact: {fact}={value}")
+
+    _set_facter("env", env)
+    _set_facter("ps_tier", tier)
+    _set_facter("ps_pillar", pillar)
+    _set_facter("ps_zone", zone)
+    _set_facter("ps_role", role)
 
     print_info(f"Running: {' '.join(cmd)}")
 

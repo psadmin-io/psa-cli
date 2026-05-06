@@ -50,15 +50,18 @@ def _resolve_facts_d(dpk_path: Optional[Path]) -> Path:
 
     Search order:
       1. <dpk_base>/psft_puppet_agent/facter/facts.d/
-      2. /opt/puppetlabs/facter/facts.d/
-      3. /etc/facter/facts.d/
+      2. <dpk_base>.parent/psft_puppet_agent/facter/facts.d/  (for callers that
+         passed a dpk/ subdir; common in DPK installs)
+      3. /opt/puppetlabs/facter/facts.d/
+      4. /etc/facter/facts.d/
 
     Returns the first existing dir, or option (1) if none exist (caller will
     create it on write).
     """
     dpk_base = _resolve_dpk_base(dpk_path)
     primary = dpk_base / "psft_puppet_agent" / "facter" / "facts.d"
-    candidates = [primary] + [Path(p) for p in FACTS_D_CANDIDATES]
+    parent_layout = dpk_base.parent / "psft_puppet_agent" / "facter" / "facts.d"
+    candidates = [primary, parent_layout] + [Path(p) for p in FACTS_D_CANDIDATES]
     for c in candidates:
         if c.exists():
             return c
