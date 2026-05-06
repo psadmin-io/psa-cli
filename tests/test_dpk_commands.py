@@ -1,4 +1,4 @@
-"""Tests for DPK command changes (source path, hiera, modules, puppet.conf)."""
+"""Tests for DPK command changes (source path, hiera, modules, environment.conf)."""
 
 import os
 from pathlib import Path
@@ -8,11 +8,11 @@ import yaml
 
 from psa.commands.dpk.core import (
     _check_dpk_prerequisites,
+    _deploy_environment_conf,
     _deploy_hiera_files,
     _deploy_module_files,
-    _deploy_puppet_conf,
+    _generate_environment_conf,
     _generate_hiera_yaml,
-    _generate_puppet_conf,
     _get_source_path,
     _verify_puppet,
     DeployType,
@@ -64,13 +64,13 @@ def test_get_source_path_no_io_home(monkeypatch, tmp_path):
 
 
 def test_generate_hiera_yaml_with_all_paths(tmp_path):
-    """Hiera YAML includes cust, kit, and DPK layers with correct paths."""
+    """Hiera YAML includes cust, kit, and DPK layers with correct paths (kit enabled)."""
     cust = tmp_path / "cust"
     kit = tmp_path / "kit"
-    result = _generate_hiera_yaml(cust, kit)
+    result = _generate_hiera_yaml(cust, kit, enable_psa_kit=True)
 
-    # Should contain cust datadir
-    cust_datadir = str(cust / "dpk" / "puppet" / "production" / "data")
+    # Should contain cust datadir (flat layout)
+    cust_datadir = str(cust / "data")
     assert cust_datadir in result
 
     # Should contain kit datadir
@@ -86,14 +86,25 @@ def test_generate_hiera_yaml_with_all_paths(tmp_path):
     assert "domain/%{facts.domainname}.yaml" in result
     assert "server/%{facts.hostname}.yaml" in result
     assert "tier/%{facts.ps_tier}.yaml" in result
+    assert "environment/%{facts.env}.yaml" in result
+    # Old env/ directory should not appear (renamed to environment/)
+    assert "env/%{facts.env}.yaml" not in result
 
-    # Kit layer
+    # Kit layer (only when enable_psa_kit=True)
     assert "psa-ops/common.yaml" in result
+
+
+def test_generate_hiera_yaml_kit_disabled_by_default(tmp_path):
+    """Default (enable_psa_kit=False) omits kit layer even when kit path is set."""
+    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit")
+    assert "psa-ops/common.yaml" not in result
+    # Cust layers still present
+    assert "domain/%{facts.domainname}.yaml" in result
 
 
 def test_generate_hiera_yaml_no_cust():
     """Hiera YAML without cust path skips cust layers."""
-    result = _generate_hiera_yaml(None, Path("/kit"))
+    result = _generate_hiera_yaml(None, Path("/kit"), enable_psa_kit=True)
     assert "domain/" not in result
     assert "server/" not in result
     # Kit layer still present
@@ -102,7 +113,7 @@ def test_generate_hiera_yaml_no_cust():
 
 def test_generate_hiera_yaml_no_kit():
     """Hiera YAML without kit path skips kit layer."""
-    result = _generate_hiera_yaml(Path("/cust"), None)
+    result = _generate_hiera_yaml(Path("/cust"), None, enable_psa_kit=True)
     assert "psa-ops/common.yaml" not in result
     # Cust layers still present
     assert "domain/%{facts.domainname}.yaml" in result
@@ -110,7 +121,7 @@ def test_generate_hiera_yaml_no_kit():
 
 def test_generate_hiera_yaml_is_valid_yaml(tmp_path):
     """Generated hiera.yaml is valid YAML."""
-    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit")
+    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit", enable_psa_kit=True)
     parsed = yaml.safe_load(result)
     assert parsed["version"] == 5
     assert "hierarchy" in parsed
@@ -119,7 +130,7 @@ def test_generate_hiera_yaml_is_valid_yaml(tmp_path):
 
 def test_generate_hiera_yaml_dpk_layers_no_datadir(tmp_path):
     """DPK base layers should not have datadir override."""
-    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit")
+    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit", enable_psa_kit=True)
     # Parse and check DPK layers
     parsed = yaml.safe_load(result)
     dpk_names = [
@@ -146,7 +157,8 @@ def test_deploy_hiera_files_writes_to_puppet_dirs(dpk_tree, tmp_path):
     assert hiera_prod.exists()
 
     content = hiera_root.read_text()
-    assert str(cust / "dpk" / "puppet" / "production" / "data") in content
+    # Flat layout: cust datadir is <cust>/data
+    assert str(cust / "data") in content
 
 
 def test_deploy_hiera_files_dry_run(dpk_tree, tmp_path):
@@ -183,17 +195,18 @@ def test_deploy_module_files_backup_existing(dpk_tree, kit_source):
     assert (backup / "old.pp").exists()
 
 
-# --- _generate_puppet_conf tests ---
+# --- _generate_environment_conf tests ---
 
 
-def test_generate_puppet_conf_all_paths(tmp_path):
-    """puppet.conf modulepath includes cust:kit:dpk."""
+def test_generate_environment_conf_all_paths(tmp_path):
+    """environment.conf modulepath includes cust:kit:dpk when enable_psa_kit=True."""
     cust = tmp_path / "cust"
     kit = tmp_path / "kit"
     dpk = tmp_path / "dpk"
-    result = _generate_puppet_conf(cust, kit, dpk)
+    result = _generate_environment_conf(cust, kit, dpk, enable_psa_kit=True)
 
-    cust_mod = str(cust / "dpk" / "puppet" / "production" / "modules")
+    # Flat layout: cust modules is <cust>/modules
+    cust_mod = str(cust / "modules")
     kit_mod = str(kit / "dpk" / "puppet" / "production" / "modules")
     dpk_mod = str(dpk / "puppet" / "production" / "modules")
 
@@ -205,37 +218,57 @@ def test_generate_puppet_conf_all_paths(tmp_path):
     assert result.index(cust_mod) < result.index(kit_mod)
     assert result.index(kit_mod) < result.index(dpk_mod)
 
+    # Required environment.conf keys
+    assert "modulepath" in result
+    assert "manifest = manifests/site.pp" in result
+    assert "environment_timeout" in result
 
-def test_generate_puppet_conf_no_cust(tmp_path):
-    """puppet.conf without cust only has kit:dpk."""
+
+def test_generate_environment_conf_kit_disabled_by_default(tmp_path):
+    """Default (enable_psa_kit=False) omits kit segment from modulepath."""
+    cust = tmp_path / "cust"
     kit = tmp_path / "kit"
     dpk = tmp_path / "dpk"
-    result = _generate_puppet_conf(None, kit, dpk)
+    result = _generate_environment_conf(cust, kit, dpk)
+
+    kit_mod = str(kit / "dpk" / "puppet" / "production" / "modules")
+    cust_mod = str(cust / "modules")
+    dpk_mod = str(dpk / "puppet" / "production" / "modules")
+    assert kit_mod not in result
+    assert cust_mod in result
+    assert dpk_mod in result
+
+
+def test_generate_environment_conf_no_cust(tmp_path):
+    """environment.conf without cust only has kit:dpk."""
+    kit = tmp_path / "kit"
+    dpk = tmp_path / "dpk"
+    result = _generate_environment_conf(None, kit, dpk, enable_psa_kit=True)
 
     kit_mod = str(kit / "dpk" / "puppet" / "production" / "modules")
     dpk_mod = str(dpk / "puppet" / "production" / "modules")
 
     assert kit_mod in result
     assert dpk_mod in result
-    assert "cust" not in result
 
 
-# --- _deploy_puppet_conf tests ---
+# --- _deploy_environment_conf tests ---
 
 
-def test_deploy_puppet_conf_writes_file(dpk_tree, tmp_path):
-    """puppet.conf is written to puppet/ directory."""
-    assert _deploy_puppet_conf(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=False)
-    target = dpk_tree / "puppet" / "puppet.conf"
+def test_deploy_environment_conf_writes_file(dpk_tree, tmp_path):
+    """environment.conf is written to puppet/production/."""
+    assert _deploy_environment_conf(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=False)
+    target = dpk_tree / "puppet" / "production" / "environment.conf"
     assert target.exists()
     content = target.read_text()
     assert "modulepath" in content
+    assert "manifest = manifests/site.pp" in content
 
 
-def test_deploy_puppet_conf_dry_run(dpk_tree, tmp_path):
-    """Dry run does not write puppet.conf."""
-    assert _deploy_puppet_conf(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=True)
-    assert not (dpk_tree / "puppet" / "puppet.conf").exists()
+def test_deploy_environment_conf_dry_run(dpk_tree, tmp_path):
+    """Dry run does not write environment.conf."""
+    assert _deploy_environment_conf(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=True)
+    assert not (dpk_tree / "puppet" / "production" / "environment.conf").exists()
 
 
 # --- _check_dpk_prerequisites tests ---

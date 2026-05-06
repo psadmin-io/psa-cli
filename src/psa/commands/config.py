@@ -95,7 +95,7 @@ SETTABLE_KEYS = {
     "runtime_user": ("str", "OS user for domain commands"),
     "dpk_repo_path": ("path", "Path to DPK file repository (PCM mount or local dir)"),
     "psa_kit_path": ("path", "Path to PSA Kit installation"),
-    "psa_cust_path": ("path", "Path to PSA customer customizations"),
+    "dpk_cust_home": ("path", "Path to DPK customer customizations (DPK_CUST_HOME)"),
 }
 
 
@@ -168,8 +168,8 @@ def config_show() -> None:
         console.print(f"  PS_CUST_HOME: {config.ps_cust_home}")
     if config.psa_kit_path:
         console.print(f"  PSA Kit: {config.psa_kit_path}")
-    if config.psa_cust_path:
-        console.print(f"  PSA Cust: {config.psa_cust_path}")
+    if config.dpk_cust_home:
+        console.print(f"  DPK_CUST_HOME: {config.dpk_cust_home}")
     if config.multi_homes:
         console.print(f"  Multi-homes: {', '.join(str(p) for p in config.multi_homes)}")
     console.print(f"  Runtime user: {config.runtime_user}")

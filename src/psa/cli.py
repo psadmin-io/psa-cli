@@ -6,6 +6,7 @@ import typer
 
 from psa import __version__
 from psa.commands import config, domain, dpk, kit, ops
+from psa.core.config import PsaConfig
 from psa.core.output import Verbosity, console, set_verbosity
 
 # Main application
@@ -17,12 +18,14 @@ app = typer.Typer(
     add_completion=False,
 )
 
-# Register subcommands (alphabetized)
+# Register subcommands (alphabetized).
+# `kit` is gated on config.enable_psa_kit; `ops` is hidden but still callable.
+_cfg = PsaConfig.load()
 app.add_typer(config.app, name="config")
 app.add_typer(domain.app, name="domain")
 app.add_typer(dpk.app, name="dpk")
-app.add_typer(kit.app, name="kit")
-app.add_typer(ops.app, name="ops")
+app.add_typer(kit.app, name="kit", hidden=not _cfg.enable_psa_kit)
+app.add_typer(ops.app, name="ops", hidden=True)
 
 
 def version_callback(value: bool) -> None:
