@@ -166,18 +166,16 @@ def dpk_init(
     Creates a fresh customer customization tree with empty Hiera layers,
     a generated Puppet environment.conf, hiera.yaml, and site.pp manifest.
 
-    Requires 'psa init' to have run first to create ~/.config/psa/config.yaml.
+    Creates ~/.config/psa/config.yaml if it does not already exist.
+    For full path auto-detection (PS_CFG_HOME, PS_HOME, etc.), run
+    'psa config setup' first or after.
 
     Examples:
         psa dpk init
         psa dpk init --path /u01/app/io/dpk-cust --dpk-path /u01/app/psoft
         psa dpk init --dry-run
     """
-    if not CONFIG_PATH.exists():
-        print_error(f"psa config file not found: {CONFIG_PATH}")
-        print_info("Run 'psa init' first")
-        raise typer.Exit(1)
-
+    config_was_missing = not CONFIG_PATH.exists()
     config = get_config()
     target = _resolve_target(path, config)
     dpk_base = _resolve_dpk_base(dpk_path)
@@ -234,10 +232,14 @@ def dpk_init(
     if dry_run:
         return
 
-    # Save path to config
+    # Save path to config (creates the file on first run)
     config.dpk_cust_home = target
     config.save()
-    print_info(f"Saved dpk_cust_home in {CONFIG_PATH}")
+    if config_was_missing:
+        print_success(f"Created {CONFIG_PATH}")
+        print_info("Run 'psa config setup' to populate PS paths (PS_CFG_HOME, PS_HOME, ...)")
+    else:
+        print_info(f"Saved dpk_cust_home in {CONFIG_PATH}")
 
     print_success("DPK_CUST_HOME scaffolded")
     print_info(f"Next: clone modules into {target / 'modules'} then run 'psa dpk sync --dpk-path {dpk_base}'")

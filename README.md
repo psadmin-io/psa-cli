@@ -27,11 +27,14 @@ pip install -e .
 ## Quick Start
 
 ```bash
-# Initialize with auto-detected paths
-psa init
+# Initialize with auto-detected paths (interactive)
+psa config setup
+
+# Accept all detected defaults non-interactively
+psa config setup --yes
 
 # Or specify paths explicitly
-psa init --ps-cfg-home /u01/app/psoft/cfg --domain-user psadm2
+psa config setup --ps-cfg-home /u01/app/psoft/cfg --runtime-user psadm2
 ```
 
 ## Commands

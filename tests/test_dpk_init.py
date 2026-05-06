@@ -83,12 +83,20 @@ def test_scaffold_dry_run_creates_nothing(tmp_path):
 # --- psa dpk init command tests ---
 
 
-def test_init_requires_psa_init_first(tmp_path, monkeypatch):
-    """psa dpk init errors if ~/.config/psa/config.yaml does not exist."""
-    monkeypatch.setattr("psa.commands.dpk.init.CONFIG_PATH", tmp_path / "missing.yaml")
-    result = runner.invoke(dpk_app, ["init", "--path", str(tmp_path / "cust")])
-    assert result.exit_code != 0
-    assert "psa init" in result.output.lower()
+def test_init_creates_config_when_missing(tmp_path, monkeypatch):
+    """psa dpk init creates ~/.config/psa/config.yaml on first run."""
+    config_path = tmp_path / "psa-config.yaml"
+    monkeypatch.setattr("psa.commands.dpk.init.CONFIG_PATH", config_path)
+    monkeypatch.setattr("psa.core.config.CONFIG_PATH", config_path)
+
+    target = tmp_path / "cust"
+    result = runner.invoke(
+        dpk_app, ["init", "--path", str(target), "--dpk-path", str(tmp_path / "dpk")]
+    )
+    assert result.exit_code == 0, result.output
+    assert config_path.exists()
+    # Hint that user should run config setup next for full path detection
+    assert "psa config setup" in result.output.lower()
 
 
 def test_init_refuses_non_empty_target(tmp_path, monkeypatch):
