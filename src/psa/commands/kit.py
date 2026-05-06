@@ -53,88 +53,9 @@ def _resolve_dpk_cust_home(cust: Optional[Path] = None) -> Path:
 
 
 def _scaffold_dpk_cust_home(cust_path: Path) -> None:
-    """Scaffold DPK_CUST_HOME directory structure."""
-    data_base = cust_path / "dpk" / "puppet" / "production" / "data"
-    modules_dir = cust_path / "dpk" / "puppet" / "production" / "modules"
-
-    subdirs = ["tier", "env", "server", "domain", "zone"]
-
-    # Create directories
-    for subdir in subdirs:
-        (data_base / subdir).mkdir(parents=True, exist_ok=True)
-    modules_dir.mkdir(parents=True, exist_ok=True)
-
-    # Root README
-    readme = cust_path / "README.md"
-    if not readme.exists():
-        readme.write_text(
-            "# DPK_CUST_HOME\n\n"
-            "Customer-specific DPK customizations for this environment.\n"
-            "See dpk/puppet/production/data/ for Hiera data layers.\n"
-        )
-
-    # Data README
-    data_readme = data_base / "README.md"
-    if not data_readme.exists():
-        data_readme.write_text(
-            "# Hiera Data\n\n"
-            "Customer customization layers (highest to lowest priority):\n"
-            "- domain/ — Per-domain overrides\n"
-            "- server/ — Per-server overrides\n"
-            "- env/ — Environment-level config\n"
-            "- tier/ — Tier-level config (DEV, TST, PRD)\n"
-            "- zone/ — Zone-role config\n"
-            "- common.yaml — Shared customizations\n"
-        )
-
-    # common.yaml example
-    common_example = data_base / "common.yaml.example"
-    if not common_example.exists():
-        common_example.write_text(
-            "---\n"
-            "# Common customizations applied to all nodes.\n"
-            "# Rename to common.yaml to activate.\n"
-            "#\n"
-            "# Example:\n"
-            "# io_profile::psft_setup::jdk_location: /u01/app/oracle/jdk\n"
-        )
-
-    # Subdir READMEs
-    for subdir in subdirs:
-        subdir_readme = data_base / subdir / "README.md"
-        if not subdir_readme.exists():
-            subdir_readme.write_text(
-                f"# {subdir.capitalize()} Layer\n\n"
-                f"Place {subdir}-specific YAML files here.\n"
-                f"File naming: <{subdir}_name>.yaml\n"
-            )
-
-    # Tier example
-    tier_example = data_base / "tier" / "DEV.yaml.example"
-    if not tier_example.exists():
-        tier_example.write_text(
-            "---\n"
-            "# Tier-level overrides for DEV tier.\n"
-            "# Rename to DEV.yaml to activate.\n"
-        )
-
-    # Env example
-    env_example = data_base / "env" / "FSCMDEV.yaml.example"
-    if not env_example.exists():
-        env_example.write_text(
-            "---\n"
-            "# Environment-level overrides for FSCMDEV.\n"
-            "# Rename to FSCMDEV.yaml to activate.\n"
-        )
-
-    # Modules README
-    modules_readme = modules_dir / "README.md"
-    if not modules_readme.exists():
-        modules_readme.write_text(
-            "# Custom Puppet Modules\n\n"
-            "Place customer-specific Puppet modules here.\n"
-            "These take precedence over kit and DPK modules.\n"
-        )
+    """Scaffold DPK_CUST_HOME (flat layout). Delegates to shared helper."""
+    from psa.commands.dpk.init import scaffold_dpk_cust_home
+    scaffold_dpk_cust_home(cust_path)
 
 
 @app.command("install")
