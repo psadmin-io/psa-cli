@@ -1,66 +1,28 @@
-"""Tests for DPK command changes (source path, hiera, modules, environment.conf)."""
+"""Tests for DPK command changes (hiera, environment.conf, prereq, sync)."""
 
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import yaml
+from typer.testing import CliRunner
 
+from psa.commands.dpk import app as dpk_app
 from psa.commands.dpk.core import (
     NCURSES_LIB_NAMES,
     _check_dpk_prerequisites,
     _deploy_environment_conf,
     _deploy_hiera_files,
-    _deploy_module_files,
     _detect_os_major_version,
     _generate_environment_conf,
     _generate_hiera_yaml,
-    _get_source_path,
     _plan_ncurses_fix,
     _verify_puppet,
     DeployType,
 )
 from psa.core.config import PsaConfig
 
-
-# --- _get_source_path tests ---
-
-
-def test_get_source_path_returns_cli_arg(tmp_path):
-    """CLI --source arg takes priority."""
-    source = tmp_path / "my-source"
-    source.mkdir()
-    result = _get_source_path(source)
-    assert result == source.resolve()
-
-
-def test_get_source_path_uses_psa_kit_env(monkeypatch, tmp_path):
-    """PSA_KIT env var used when no CLI arg."""
-    kit = tmp_path / "kit"
-    monkeypatch.setenv("PSA_KIT", str(kit))
-    result = _get_source_path(None)
-    assert result == kit
-
-
-def test_get_source_path_falls_back_to_config(monkeypatch, tmp_path):
-    """Falls back to config.psa_kit_path when env not set."""
-    monkeypatch.delenv("PSA_KIT", raising=False)
-    config = PsaConfig()
-    config.psa_kit_path = tmp_path / "from-config"
-    with patch("psa.commands.dpk.core.get_config", return_value=config):
-        result = _get_source_path(None)
-    assert result == tmp_path / "from-config"
-
-
-def test_get_source_path_no_io_home(monkeypatch, tmp_path):
-    """IO_HOME is no longer checked."""
-    monkeypatch.delenv("PSA_KIT", raising=False)
-    monkeypatch.setenv("IO_HOME", str(tmp_path / "io-home"))
-    config = PsaConfig()
-    with patch("psa.commands.dpk.core.get_config", return_value=config):
-        result = _get_source_path(None)
-    # Should NOT return IO_HOME — falls through to package location
-    assert result != tmp_path / "io-home"
+runner = CliRunner()
 
 
 # --- _generate_hiera_yaml tests ---
@@ -168,34 +130,6 @@ def test_deploy_hiera_files_dry_run(dpk_tree, tmp_path):
     """Dry run does not write files."""
     assert _deploy_hiera_files(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=True)
     assert not (dpk_tree / "puppet" / "hiera.yaml").exists()
-
-
-# --- _deploy_module_files tests ---
-
-
-def test_deploy_module_files_all_io_modules(dpk_tree, kit_source):
-    """All io_* modules from source are deployed."""
-    result = _deploy_module_files(dpk_tree, kit_source, dry_run=False)
-    assert result is True
-
-    modules_dir = dpk_tree / "puppet" / "production" / "modules"
-    deployed = sorted(d.name for d in modules_dir.iterdir() if d.is_dir())
-    assert "io_profile" in deployed
-    assert "io_role" in deployed
-    assert "io_tools" in deployed
-
-
-def test_deploy_module_files_backup_existing(dpk_tree, kit_source):
-    """Existing modules are backed up before overwrite."""
-    target = dpk_tree / "puppet" / "production" / "modules" / "io_role"
-    target.mkdir(parents=True, exist_ok=True)
-    (target / "old.pp").write_text("old content")
-
-    _deploy_module_files(dpk_tree, kit_source, dry_run=False)
-
-    backup = dpk_tree / "puppet" / "production" / "modules" / "io_role.bak"
-    assert backup.exists()
-    assert (backup / "old.pp").exists()
 
 
 # --- _generate_environment_conf tests ---
@@ -534,3 +468,39 @@ def test_verify_puppet_not_found_no_exit(tmp_path, monkeypatch):
 
     result = _verify_puppet(exit_on_fail=False)
     assert result is False
+
+
+# --- psa dpk sync tests ---
+
+
+def test_sync_hard_fails_when_dpk_cust_home_unset(dpk_tree, monkeypatch):
+    """sync exits non-zero when neither $DPK_CUST_HOME nor config.dpk_cust_home is set."""
+    monkeypatch.delenv("DPK_CUST_HOME", raising=False)
+    monkeypatch.delenv("PSA_KIT", raising=False)
+    config = PsaConfig()  # no dpk_cust_home
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        result = runner.invoke(dpk_app, ["sync", "--dpk-path", str(dpk_tree), "--dry-run"])
+    assert result.exit_code != 0
+    assert "DPK_CUST_HOME not configured" in result.output
+    assert "psa dpk init" in result.output
+
+
+def test_sync_runs_with_dpk_cust_home_from_env(dpk_tree, tmp_path, monkeypatch):
+    """sync proceeds (dry-run) when $DPK_CUST_HOME is set, even if config doesn't have it."""
+    cust = tmp_path / "cust"
+    cust.mkdir()
+    monkeypatch.setenv("DPK_CUST_HOME", str(cust))
+    monkeypatch.delenv("PSA_KIT", raising=False)
+    config = PsaConfig()
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        result = runner.invoke(dpk_app, ["sync", "--dpk-path", str(dpk_tree), "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "Dry run" in result.output
+
+
+def test_sync_help_no_longer_shows_source_or_modules():
+    """--source and --modules are removed (kit-era cruft)."""
+    result = runner.invoke(dpk_app, ["sync", "--help"])
+    assert result.exit_code == 0
+    assert "--source" not in result.output
+    assert "--modules" not in result.output

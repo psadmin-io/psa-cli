@@ -145,15 +145,15 @@ def dpk_tree(tmp_path):
 
 @pytest.fixture
 def kit_source(tmp_path):
-    """Create a fake psa-kit source tree with io_* modules."""
+    """Create a fake psa-kit source tree with io_* modules (used by hidden `psa kit` tests)."""
     kit = tmp_path / "psa-kit"
     modules = kit / "dpk" / "puppet" / "production" / "modules"
     for name in ["io_profile", "io_role", "io_tools"]:
         mod_dir = modules / name
         mod_dir.mkdir(parents=True)
         (mod_dir / "init.pp").write_text(f"# {name}\n")
-    # Also create data dir
     data = kit / "dpk" / "puppet" / "production" / "data" / "psa-ops"
     data.mkdir(parents=True)
     (data / "common.yaml").write_text("---\n# psa-ops defaults\n")
     return kit
+

@@ -1233,25 +1233,6 @@ def _verify_puppet(exit_on_fail: bool = True, quiet: bool = False) -> Union[bool
 # --- Helper functions for sync command ---
 
 
-def _get_source_path(source: Optional[Path]) -> Path:
-    """Resolve source path from CLI arg, PSA_KIT env, config, or package location."""
-    if source:
-        return source.resolve()
-
-    # Check PSA_KIT environment variable
-    psa_kit = os.environ.get("PSA_KIT")
-    if psa_kit:
-        return Path(psa_kit)
-
-    # Check config
-    config = get_config()
-    if config.psa_kit_path:
-        return config.psa_kit_path
-
-    # Fall back to package location (relative to this file)
-    return Path(__file__).resolve().parent.parent.parent.parent.parent
-
-
 def _deploy_hiera_files(
     dpk_path: Path,
     dpk_cust_home: Optional[Path] = None,
@@ -1374,52 +1355,6 @@ def _deploy_environment_conf(
     return True
 
 
-def _deploy_module_files(
-    dpk_path: Path, source_path: Path, dry_run: bool = False
-) -> bool:
-    """Deploy io_profile and io_role modules. Returns True on success."""
-    modules_dir = dpk_path / "puppet" / "production" / "modules"
-    if not modules_dir.exists():
-        print_error(f"Modules directory not found: {modules_dir}")
-        return False
-
-    source_modules = source_path / "dpk" / "puppet" / "production" / "modules"
-    if not source_modules.exists():
-        print_error(f"Source modules not found: {source_modules}")
-        return False
-
-    module_names = sorted(
-        d.name
-        for d in source_modules.iterdir()
-        if d.is_dir() and d.name.startswith("io_")
-    )
-    deployed = 0
-
-    for module_name in module_names:
-        source = source_modules / module_name
-        target = modules_dir / module_name
-        backup = modules_dir / f"{module_name}.bak"
-
-        if not source.exists():
-            print_warning(f"  Source module not found: {module_name}")
-            continue
-
-        if dry_run:
-            if target.exists():
-                console.print(f"  [dim]Would backup: {module_name}[/dim]")
-            console.print(f"  [dim]Would copy: {module_name}/[/dim]")
-        else:
-            if target.exists():
-                if backup.exists():
-                    shutil.rmtree(backup)
-                shutil.move(str(target), str(backup))
-            shutil.copytree(source, target)
-            print_success(f"  {module_name}/ -> modules/")
-            deployed += 1
-
-    return deployed > 0 or dry_run
-
-
 @app.command("sync")
 def sync(
     dpk_path: Optional[Path] = typer.Option(
@@ -1427,12 +1362,6 @@ def sync(
         "--dpk-path",
         "-d",
         help=f"DPK directory (or ${ENV_DPK_BASE}/dpk)",
-    ),
-    source: Optional[Path] = typer.Option(
-        None,
-        "--source",
-        "-s",
-        help="Source path (or $PSA_KIT)",
     ),
     do_hiera: bool = typer.Option(
         False,
@@ -1443,11 +1372,6 @@ def sync(
         False,
         "--site",
         help="Sync site.pp only (default: sync all)",
-    ),
-    do_modules: bool = typer.Option(
-        False,
-        "--modules",
-        help="Sync custom modules only (default: sync all)",
     ),
     do_environment_conf: bool = typer.Option(
         False,
@@ -1482,10 +1406,13 @@ def sync(
     ),
 ) -> None:
     """
-    Sync custom DPK files to local installation
+    Refresh generated config files in DPK_HOME so Puppet picks up DPK_CUST_HOME.
 
-    Deploys hiera.yaml, site.pp, environment.conf, and io_* modules in one command.
-    Use --hiera, --site, --environment-conf, or --modules to sync only specific components.
+    Writes hiera.yaml, site.pp, and environment.conf into DPK_HOME/puppet/.
+    Modules are no longer copied here — install them into DPK_CUST_HOME/modules/
+    via 'psa dpk module install'; environment.conf points Puppet's modulepath there.
+
+    Requires 'psa dpk init' to have been run (config.dpk_cust_home must be set).
 
     Examples:
         psa dpk sync --dpk-path /opt/oracle/psft/dpk
@@ -1493,7 +1420,7 @@ def sync(
         psa dpk sync --dry-run
     """
     # If none of the filter flags specified, sync all
-    sync_all = not (do_hiera or do_site or do_modules or do_environment_conf)
+    sync_all = not (do_hiera or do_site or do_environment_conf)
 
     # Resolve DPK path
     resolved_dpk = _get_env_path(ENV_DPK_BASE, dpk_path)
@@ -1508,27 +1435,24 @@ def sync(
         print_error(f"DPK path not found: {resolved_dpk}")
         raise typer.Exit(1)
 
-    # Resolve source path
-    resolved_source = _get_source_path(source)
-    if not resolved_source.exists():
-        print_error(f"Source path not found: {resolved_source}")
-        raise typer.Exit(1)
-
-    # Resolve dpk_cust_home and psa_kit_path for hiera/environment.conf generation
+    # Resolve dpk_cust_home (required) and psa_kit_path (optional, kit-only)
     config = get_config()
     resolved_cust = (
         Path(os.environ["DPK_CUST_HOME"]) if os.environ.get("DPK_CUST_HOME")
         else config.dpk_cust_home
     )
+    if not resolved_cust:
+        print_error("DPK_CUST_HOME not configured.")
+        print_info("Run 'psa dpk init' first, or set $DPK_CUST_HOME.")
+        raise typer.Exit(1)
+
     resolved_kit = (
         Path(os.environ["PSA_KIT"]) if os.environ.get("PSA_KIT")
         else config.psa_kit_path
     )
 
     print_info(f"DPK path: {resolved_dpk}")
-    print_info(f"Source: {resolved_source}")
-    if resolved_cust:
-        print_info(f"DPK_CUST_HOME: {resolved_cust}")
+    print_info(f"DPK_CUST_HOME: {resolved_cust}")
     if resolved_kit:
         print_info(f"PSA Kit: {resolved_kit}")
     console.print()
@@ -1558,11 +1482,6 @@ def sync(
             resolved_dpk, resolved_cust, resolved_kit, dry_run,
             enable_psa_kit=config.enable_psa_kit,
         ):
-            raise typer.Exit(1)
-
-    # Deploy modules
-    if sync_all or do_modules:
-        if not _deploy_module_files(resolved_dpk, resolved_source, dry_run):
             raise typer.Exit(1)
 
     # Optionally sync OPS data
