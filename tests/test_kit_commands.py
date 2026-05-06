@@ -9,15 +9,15 @@ from typer.testing import CliRunner
 
 from psa.commands.kit import (
     PSA_KIT_REPO_SSH,
-    _resolve_cust_path,
+    _resolve_dpk_cust_home,
     _resolve_kit_path,
-    _scaffold_psa_cust,
+    _scaffold_dpk_cust_home,
     app,
     kit_install,
     kit_status,
     kit_update,
 )
-from psa.core.config import DEFAULT_PSA_CUST, DEFAULT_PSA_KIT, PsaConfig
+from psa.core.config import DEFAULT_DPK_CUST_HOME, DEFAULT_PSA_KIT, PsaConfig
 
 runner = CliRunner()
 
@@ -54,13 +54,13 @@ def test_resolve_kit_path_default(monkeypatch):
         assert _resolve_kit_path() == Path(DEFAULT_PSA_KIT)
 
 
-# --- _scaffold_psa_cust tests ---
+# --- _scaffold_dpk_cust_home tests ---
 
 
 def test_scaffold_creates_dirs(tmp_path):
     """Scaffold creates expected directory structure."""
     cust = tmp_path / "cust"
-    _scaffold_psa_cust(cust)
+    _scaffold_dpk_cust_home(cust)
 
     data_base = cust / "dpk" / "puppet" / "production" / "data"
     assert data_base.exists()
@@ -75,16 +75,16 @@ def test_scaffold_creates_dirs(tmp_path):
 def test_scaffold_creates_readme(tmp_path):
     """Scaffold creates README files."""
     cust = tmp_path / "cust"
-    _scaffold_psa_cust(cust)
+    _scaffold_dpk_cust_home(cust)
 
     assert (cust / "README.md").exists()
-    assert "PSA Customizations" in (cust / "README.md").read_text()
+    assert "DPK_CUST_HOME" in (cust / "README.md").read_text()
 
 
 def test_scaffold_creates_examples(tmp_path):
     """Scaffold creates example YAML files."""
     cust = tmp_path / "cust"
-    _scaffold_psa_cust(cust)
+    _scaffold_dpk_cust_home(cust)
 
     data_base = cust / "dpk" / "puppet" / "production" / "data"
     assert (data_base / "common.yaml.example").exists()
@@ -95,13 +95,13 @@ def test_scaffold_creates_examples(tmp_path):
 def test_scaffold_idempotent(tmp_path):
     """Running scaffold twice does not overwrite existing files."""
     cust = tmp_path / "cust"
-    _scaffold_psa_cust(cust)
+    _scaffold_dpk_cust_home(cust)
 
     # Modify a file
     readme = cust / "README.md"
     readme.write_text("custom content")
 
-    _scaffold_psa_cust(cust)
+    _scaffold_dpk_cust_home(cust)
     assert readme.read_text() == "custom content"
 
 
@@ -121,7 +121,7 @@ def test_kit_status_not_installed(monkeypatch, tmp_path):
 def test_kit_status_installed(tmp_path, kit_source):
     """Status shows version, modules, cust path when installed."""
     config = PsaConfig()
-    config.psa_cust_path = tmp_path / "cust"
+    config.dpk_cust_home = tmp_path / "cust"
     with patch("psa.commands.kit.get_config", return_value=config):
         result = runner.invoke(app, ["status", "--dest", str(kit_source)])
     assert "io_profile" in result.output
@@ -137,7 +137,7 @@ def test_kit_install_git_clone(monkeypatch, tmp_path):
     dest = tmp_path / "kit"
     cust = tmp_path / "cust"
     monkeypatch.delenv("PSA_KIT", raising=False)
-    monkeypatch.delenv("PSA_CUST", raising=False)
+    monkeypatch.delenv("DPK_CUST_HOME", raising=False)
 
     mock_run = MagicMock(return_value=MagicMock(returncode=0, stdout="", stderr=""))
 
@@ -193,14 +193,14 @@ def test_kit_install_nonempty_dest_fails(tmp_path):
 
 
 def test_kit_install_warns_existing_cust(monkeypatch, tmp_path):
-    """Install warns if PSA_CUST already has files."""
+    """Install warns if DPK_CUST_HOME already has files."""
     dest = tmp_path / "kit"
     cust = tmp_path / "cust"
     cust.mkdir(parents=True)
     (cust / "existing.yaml").write_text("data")
 
     monkeypatch.delenv("PSA_KIT", raising=False)
-    monkeypatch.delenv("PSA_CUST", raising=False)
+    monkeypatch.delenv("DPK_CUST_HOME", raising=False)
 
     mock_run = MagicMock(return_value=MagicMock(returncode=0, stdout="", stderr=""))
     config = PsaConfig()

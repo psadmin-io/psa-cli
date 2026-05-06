@@ -45,8 +45,8 @@ ENV_DPK_BASE = "DPK_BASE"
 # Defaults
 DEFAULT_DPK_BASE = "/u01/app/psoft"
 
-def _generate_hiera_yaml(psa_cust_path: Optional[Path], psa_kit_path: Optional[Path]) -> str:
-    """Generate hiera.yaml with 3-tier hierarchy: CUST -> KIT -> DPK base.
+def _generate_hiera_yaml(dpk_cust_home: Optional[Path], psa_kit_path: Optional[Path]) -> str:
+    """Generate hiera.yaml with 3-tier hierarchy: DPK_CUST_HOME -> KIT -> DPK base.
 
     Customer and kit layers use absolute datadir paths so Puppet reads from
     those locations. DPK layers use relative paths (the default data dir).
@@ -63,8 +63,8 @@ def _generate_hiera_yaml(psa_cust_path: Optional[Path], psa_kit_path: Optional[P
     ]
 
     # --- Customer layer (absolute datadir) ---
-    if psa_cust_path:
-        cust_datadir = str(psa_cust_path / "dpk" / "puppet" / "production" / "data")
+    if dpk_cust_home:
+        cust_datadir = str(dpk_cust_home / "dpk" / "puppet" / "production" / "data")
         lines += [
             f'  - name: "Per-domain customizations"',
             f'    datadir: "{cust_datadir}"',
@@ -76,7 +76,7 @@ def _generate_hiera_yaml(psa_cust_path: Optional[Path], psa_kit_path: Optional[P
             "",
             f'  - name: "Environment-level config"',
             f'    datadir: "{cust_datadir}"',
-            f'    path: "env/%{{facts.env}}.yaml"',
+            f'    path: "environment/%{{facts.env}}.yaml"',
             "",
             f'  - name: "Tier-level config"',
             f'    datadir: "{cust_datadir}"',
@@ -1126,7 +1126,7 @@ def _get_source_path(source: Optional[Path]) -> Path:
 
 def _deploy_hiera_files(
     dpk_path: Path,
-    psa_cust_path: Optional[Path] = None,
+    dpk_cust_home: Optional[Path] = None,
     psa_kit_path: Optional[Path] = None,
     dry_run: bool = False,
 ) -> bool:
@@ -1136,7 +1136,7 @@ def _deploy_hiera_files(
         print_error(f"Puppet directory not found: {puppet_dir}")
         return False
 
-    hiera_content = _generate_hiera_yaml(psa_cust_path, psa_kit_path)
+    hiera_content = _generate_hiera_yaml(dpk_cust_home, psa_kit_path)
 
     targets = [
         puppet_dir / "hiera.yaml",
@@ -1187,16 +1187,16 @@ def _deploy_site_pp(dpk_path: Path, dry_run: bool = False) -> bool:
 
 
 def _generate_puppet_conf(
-    psa_cust_path: Optional[Path],
+    dpk_cust_home: Optional[Path],
     psa_kit_path: Optional[Path],
     dpk_base_path: Path,
 ) -> str:
-    """Generate puppet.conf with 3-tier modulepath: CUST:KIT:DPK modules."""
+    """Generate puppet.conf with 3-tier modulepath: DPK_CUST_HOME:KIT:DPK modules."""
     dpk_modules = str(dpk_base_path / "puppet" / "production" / "modules")
 
     parts = []
-    if psa_cust_path:
-        parts.append(str(psa_cust_path / "dpk" / "puppet" / "production" / "modules"))
+    if dpk_cust_home:
+        parts.append(str(dpk_cust_home / "dpk" / "puppet" / "production" / "modules"))
     if psa_kit_path:
         parts.append(str(psa_kit_path / "dpk" / "puppet" / "production" / "modules"))
     parts.append(dpk_modules)
@@ -1219,7 +1219,7 @@ def _generate_puppet_conf(
 
 def _deploy_puppet_conf(
     dpk_path: Path,
-    psa_cust_path: Optional[Path] = None,
+    dpk_cust_home: Optional[Path] = None,
     psa_kit_path: Optional[Path] = None,
     dry_run: bool = False,
 ) -> bool:
@@ -1231,7 +1231,7 @@ def _deploy_puppet_conf(
 
     target = puppet_dir / "puppet.conf"
     backup = target.with_suffix(".conf.bak")
-    content = _generate_puppet_conf(psa_cust_path, psa_kit_path, dpk_path)
+    content = _generate_puppet_conf(dpk_cust_home, psa_kit_path, dpk_path)
 
     if dry_run:
         if target.exists():
@@ -1385,11 +1385,11 @@ def sync(
         print_error(f"Source path not found: {resolved_source}")
         raise typer.Exit(1)
 
-    # Resolve psa_cust_path and psa_kit_path for hiera/puppet.conf generation
+    # Resolve dpk_cust_home and psa_kit_path for hiera/puppet.conf generation
     config = get_config()
     resolved_cust = (
-        Path(os.environ["PSA_CUST"]) if os.environ.get("PSA_CUST")
-        else config.psa_cust_path
+        Path(os.environ["DPK_CUST_HOME"]) if os.environ.get("DPK_CUST_HOME")
+        else config.dpk_cust_home
     )
     resolved_kit = (
         Path(os.environ["PSA_KIT"]) if os.environ.get("PSA_KIT")
@@ -1399,7 +1399,7 @@ def sync(
     print_info(f"DPK path: {resolved_dpk}")
     print_info(f"Source: {resolved_source}")
     if resolved_cust:
-        print_info(f"PSA Cust: {resolved_cust}")
+        print_info(f"DPK_CUST_HOME: {resolved_cust}")
     if resolved_kit:
         print_info(f"PSA Kit: {resolved_kit}")
     console.print()
