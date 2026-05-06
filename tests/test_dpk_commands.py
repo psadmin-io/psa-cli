@@ -86,6 +86,9 @@ def test_generate_hiera_yaml_with_all_paths(tmp_path):
     assert "domain/%{facts.domainname}.yaml" in result
     assert "server/%{facts.hostname}.yaml" in result
     assert "tier/%{facts.ps_tier}.yaml" in result
+    assert "environment/%{facts.env}.yaml" in result
+    # Old env/ directory should not appear (renamed to environment/)
+    assert "env/%{facts.env}.yaml" not in result
 
     # Kit layer
     assert "psa-ops/common.yaml" in result

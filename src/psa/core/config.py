@@ -13,7 +13,7 @@ import yaml
 DEFAULT_PS_BASE = "/u01/app/psoft"
 DEFAULT_IO_BASE = "/u01/app/io"
 DEFAULT_PSA_KIT = "/u01/app/io/psa-kit"
-DEFAULT_PSA_CUST = "/u01/app/io/psa-cust"
+DEFAULT_DPK_CUST_HOME = "/u01/app/io/dpk-cust"
 
 # Config file location
 CONFIG_PATH = Path.home() / ".config" / "psa" / "config.yaml"
@@ -48,7 +48,7 @@ class PsaConfig:
     ps_base: Path = field(default_factory=lambda: Path(DEFAULT_PS_BASE))
     io_base: Path = field(default_factory=lambda: Path(DEFAULT_IO_BASE))
     psa_kit_path: Optional[Path] = None
-    psa_cust_path: Optional[Path] = None
+    dpk_cust_home: Optional[Path] = None
     ps_cfg_home: Optional[Path] = None
     ps_home: Optional[Path] = None
     ps_app_home: Optional[Path] = None
@@ -89,8 +89,8 @@ class PsaConfig:
         if psa_kit := os.environ.get("PSA_KIT"):
             config.psa_kit_path = Path(psa_kit)
 
-        if psa_cust := os.environ.get("PSA_CUST"):
-            config.psa_cust_path = Path(psa_cust)
+        if dpk_cust := os.environ.get("DPK_CUST_HOME"):
+            config.dpk_cust_home = Path(dpk_cust)
 
         # OPS API from environment
         if ops_url := os.environ.get("PSA_OPS_URL"):
@@ -130,8 +130,8 @@ class PsaConfig:
                     config.ps_cust_home = Path(ps_cust_home)
                 if psa_kit_path := data.get("psa_kit_path"):
                     config.psa_kit_path = Path(psa_kit_path)
-                if psa_cust_path := data.get("psa_cust_path"):
-                    config.psa_cust_path = Path(psa_cust_path)
+                if dpk_cust_home := data.get("dpk_cust_home"):
+                    config.dpk_cust_home = Path(dpk_cust_home)
                 if runtime_user := data.get("runtime_user", data.get("domain_user")):
                     config.runtime_user = runtime_user
 
@@ -195,8 +195,8 @@ class PsaConfig:
             data["ps_cust_home"] = str(self.ps_cust_home)
         if self.psa_kit_path:
             data["psa_kit_path"] = str(self.psa_kit_path)
-        if self.psa_cust_path:
-            data["psa_cust_path"] = str(self.psa_cust_path)
+        if self.dpk_cust_home:
+            data["dpk_cust_home"] = str(self.dpk_cust_home)
         if self.runtime_user != "psadm2":
             data["runtime_user"] = self.runtime_user
 
