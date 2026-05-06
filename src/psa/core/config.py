@@ -61,6 +61,7 @@ class PsaConfig:
     skip_domain_confirm: bool = False  # Skip confirmation when acting on all domains
     multi_homes: list = field(default_factory=list)  # Additional PS_CFG_HOME paths
     dpk_repo_path: Optional[str] = None  # Path to DPK file repository
+    enable_psa_kit: bool = False  # Show `psa kit` group + emit kit Hiera/modulepath layer
 
     @classmethod
     def from_environment(cls) -> "PsaConfig":
@@ -146,6 +147,8 @@ class PsaConfig:
                     config.multi_homes = [Path(p) for p in multi_homes]
                 if dpk_repo_path := data.get("dpk_repo_path"):
                     config.dpk_repo_path = dpk_repo_path
+                if "enable_psa_kit" in data:
+                    config.enable_psa_kit = bool(data["enable_psa_kit"])
 
                 # OPS config (env vars take precedence)
                 if ops_data := data.get("ops"):
@@ -211,6 +214,8 @@ class PsaConfig:
             data["multi_homes"] = [str(p) for p in self.multi_homes]
         if self.dpk_repo_path:
             data["dpk_repo_path"] = self.dpk_repo_path
+        if self.enable_psa_kit:
+            data["enable_psa_kit"] = True
 
         # OPS config
         if self.ops.url:
