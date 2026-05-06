@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import subprocess
 from pathlib import Path
@@ -93,6 +94,37 @@ class SudoFileOps:
             return result.stdout
         except Exception:
             return None
+
+    def write_text(self, path: Path, content: str, *, as_root: bool = False) -> bool:
+        """Write text to a file. Returns True on success.
+
+        When as_root=True, elevates via plain `sudo bash -c` (not `sudo su -`),
+        needed for paths owned by root such as Puppet's facts.d/.
+        Content is base64-encoded over the wire to avoid shell-escaping pitfalls.
+        """
+        if not as_root and not self._needs_sudo():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+                return True
+            except (PermissionError, OSError):
+                return False
+
+        b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        inner = f"mkdir -p {path.parent} && echo {b64} | base64 -d > {path}"
+
+        if as_root:
+            full_cmd = ["sudo", "bash", "-c", inner]
+        else:
+            full_cmd = ["sudo", "su", "-", self.config.runtime_user, "-c", inner]
+
+        try:
+            result = subprocess.run(
+                full_cmd, capture_output=True, text=True, timeout=30
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def stat_size(self, path: Path) -> Optional[int]:
         """Get file size in bytes."""
