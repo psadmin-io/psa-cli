@@ -1,7 +1,6 @@
 """psa dpk facts: manage Puppet Facter external facts (server identity)."""
 
 import json
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -9,7 +8,6 @@ import typer
 import yaml
 from rich.console import Console
 
-from psa.commands.dpk.core import DEFAULT_DPK_BASE, ENV_DPK_BASE
 from psa.core.config import get_config
 from psa.core.fileops import SudoFileOps
 from psa.core.output import print_error, print_info, print_success, print_warning
@@ -24,8 +22,10 @@ FACTS_D_HEADER = (
     "# These facts are read by Facter on every Puppet run.\n"
 )
 
+# Standard system facts.d locations searched in order. Server identity belongs
+# in /etc, not in the DPK install tree (which gets blown away on reinstall).
 FACTS_D_CANDIDATES = [
-    "/opt/puppetlabs/facter/facts.d",
+    "/etc/puppetlabs/facter/facts.d",
     "/etc/facter/facts.d",
 ]
 
@@ -36,40 +36,37 @@ app = typer.Typer(
 )
 
 
-def _resolve_dpk_base(dpk_path: Optional[Path]) -> Path:
-    """Resolve DPK base: --dpk-path -> $DPK_BASE -> default."""
-    if dpk_path:
-        return dpk_path.resolve()
-    if env := os.environ.get(ENV_DPK_BASE):
-        return Path(env)
-    return Path(DEFAULT_DPK_BASE)
+def _resolve_facts_d(facts_dir: Optional[Path]) -> Path:
+    """Resolve the facts.d/ directory.
 
-
-def _resolve_facts_d(dpk_path: Optional[Path]) -> Path:
-    """Find the facts.d/ directory.
-
-    Search order:
-      1. <dpk_base>/psft_puppet_agent/facter/facts.d/
-      2. <dpk_base>.parent/psft_puppet_agent/facter/facts.d/  (for callers that
-         passed a dpk/ subdir; common in DPK installs)
-      3. /opt/puppetlabs/facter/facts.d/
-      4. /etc/facter/facts.d/
-
-    Returns the first existing dir, or option (1) if none exist (caller will
-    create it on write).
+    If facts_dir is given, use it. Otherwise return the first existing standard
+    candidate, or the first candidate if none exist (caller creates it on write).
     """
-    dpk_base = _resolve_dpk_base(dpk_path)
-    primary = dpk_base / "psft_puppet_agent" / "facter" / "facts.d"
-    parent_layout = dpk_base.parent / "psft_puppet_agent" / "facter" / "facts.d"
-    candidates = [primary, parent_layout] + [Path(p) for p in FACTS_D_CANDIDATES]
-    for c in candidates:
-        if c.exists():
-            return c
-    return primary
+    if facts_dir:
+        return facts_dir.resolve()
+    for c in FACTS_D_CANDIDATES:
+        p = Path(c)
+        if p.exists():
+            return p
+    return Path(FACTS_D_CANDIDATES[0])
 
 
-def _server_yaml_path(dpk_path: Optional[Path]) -> Path:
-    return _resolve_facts_d(dpk_path) / "server.yaml"
+def _server_yaml_path(facts_dir: Optional[Path]) -> Path:
+    return _resolve_facts_d(facts_dir) / "server.yaml"
+
+
+def _find_existing_server_yaml(
+    facts_dir: Optional[Path], fileops: SudoFileOps
+) -> Optional[Path]:
+    """Locate an existing server.yaml across standard paths. None if not found."""
+    if facts_dir:
+        candidate = facts_dir / "server.yaml"
+        return candidate if fileops.read_text(candidate) is not None else None
+    for c in FACTS_D_CANDIDATES:
+        candidate = Path(c) / "server.yaml"
+        if fileops.read_text(candidate) is not None:
+            return candidate
+    return None
 
 
 def _read_server_yaml(path: Path, fileops: SudoFileOps) -> dict:
@@ -123,10 +120,10 @@ def facts_init(
         "-p",
         help="ps_pillar (e.g., FSCM, HCM)",
     ),
-    dpk_path: Optional[Path] = typer.Option(
+    facts_dir: Optional[Path] = typer.Option(
         None,
-        "--dpk-path",
-        help=f"DPK base path (or ${ENV_DPK_BASE})",
+        "--facts-dir",
+        help=f"facts.d directory (default: first existing of {', '.join(FACTS_D_CANDIDATES)})",
     ),
     dry_run: bool = typer.Option(
         False,
@@ -139,6 +136,8 @@ def facts_init(
     Initialize the server identity file with the given facts.
 
     Writes <facts.d>/server.yaml with the explicitly-passed flags only.
+    Default location is /etc/puppetlabs/facter/facts.d/server.yaml (Puppet 6+/PE
+    convention), falling back to /etc/facter/facts.d/. Override with --facts-dir.
     Backs up an existing server.yaml to server.yaml.bak.
     Validates --role against known values.
 
@@ -146,6 +145,7 @@ def facts_init(
         psa dpk facts init --role mid --env FSCMDEV --tier DEV --zone nonprod
         psa dpk facts init --role app --env FSCMDEV --tier DEV
         psa dpk facts init --dry-run --role mid
+        psa dpk facts init --role mid --facts-dir /etc/facter/facts.d
     """
     if role is not None and role not in KNOWN_ROLES:
         print_error(f"Unknown role: {role}. Valid: {', '.join(KNOWN_ROLES)}")
@@ -167,7 +167,7 @@ def facts_init(
         print_error("No facts specified. Pass at least one of --role/--env/--tier/--zone/--pillar")
         raise typer.Exit(1)
 
-    target = _server_yaml_path(dpk_path)
+    target = _server_yaml_path(facts_dir)
     content = _format_server_yaml(facts)
 
     print_info(f"Writing server facts to {target}")
@@ -201,10 +201,10 @@ def facts_init(
 def facts_set(
     key: str = typer.Argument(..., help="Fact name (e.g., ps_role)"),
     value: str = typer.Argument(..., help="Fact value"),
-    dpk_path: Optional[Path] = typer.Option(
+    facts_dir: Optional[Path] = typer.Option(
         None,
-        "--dpk-path",
-        help=f"DPK base path (or ${ENV_DPK_BASE})",
+        "--facts-dir",
+        help=f"facts.d directory (default: first existing of {', '.join(FACTS_D_CANDIDATES)})",
     ),
 ) -> None:
     """
@@ -222,8 +222,9 @@ def facts_set(
     if key not in KNOWN_FACTS:
         print_warning(f"Unknown fact key: {key} (allowed but not in standard set: {', '.join(KNOWN_FACTS)})")
 
-    target = _server_yaml_path(dpk_path)
     fileops = SudoFileOps(get_config())
+    # Update an existing file in place if found anywhere; otherwise create at default
+    target = _find_existing_server_yaml(facts_dir, fileops) or _server_yaml_path(facts_dir)
 
     facts = _read_server_yaml(target, fileops)
     facts[key] = value
@@ -238,10 +239,10 @@ def facts_set(
 
 @app.command("list")
 def facts_list(
-    dpk_path: Optional[Path] = typer.Option(
+    facts_dir: Optional[Path] = typer.Option(
         None,
-        "--dpk-path",
-        help=f"DPK base path (or ${ENV_DPK_BASE})",
+        "--facts-dir",
+        help=f"facts.d directory (default: search {', '.join(FACTS_D_CANDIDATES)})",
     ),
     json_output: bool = typer.Option(
         False,
@@ -253,24 +254,34 @@ def facts_list(
     """
     Show the current server identity from facts.d/server.yaml.
 
+    Searches /etc/puppetlabs/facter/facts.d/ then /etc/facter/facts.d/ unless
+    --facts-dir is specified.
+
     Examples:
         psa dpk facts list
         psa dpk facts list --json
     """
-    target = _server_yaml_path(dpk_path)
     fileops = SudoFileOps(get_config())
-    raw = fileops.read_text(target)
+    target = _find_existing_server_yaml(facts_dir, fileops)
 
-    if raw is None:
+    if target is None:
+        searched = (
+            [str(facts_dir / "server.yaml")]
+            if facts_dir
+            else [f"{p}/server.yaml" for p in FACTS_D_CANDIDATES]
+        )
         if json_output:
-            console.print_json(json.dumps({"path": str(target), "facts": None}))
+            console.print_json(json.dumps({"path": None, "facts": None, "searched": searched}))
             raise typer.Exit(1)
-        print_warning("No server facts file found.")
+        print_warning("No server.yaml found. Searched:")
+        for p in searched:
+            console.print(f"  {p}")
         print_info("Run 'psa dpk facts init' to configure server identity.")
         raise typer.Exit(1)
 
+    raw = fileops.read_text(target)
     try:
-        data = yaml.safe_load(raw)
+        data = yaml.safe_load(raw) if raw else {}
     except yaml.YAMLError as e:
         print_error(f"Failed to parse {target}: {e}")
         raise typer.Exit(1)

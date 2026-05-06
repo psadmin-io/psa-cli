@@ -53,39 +53,40 @@ def test_format_server_yaml_preserves_insertion_order():
 # --- _resolve_facts_d ---
 
 
-def test_resolve_facts_d_uses_dpk_base_first(tmp_path, monkeypatch):
-    monkeypatch.delenv("DPK_BASE", raising=False)
-    primary = tmp_path / "psft_puppet_agent" / "facter" / "facts.d"
-    primary.mkdir(parents=True)
-    result = _resolve_facts_d(tmp_path)
-    assert result == primary
+def test_resolve_facts_d_explicit_override(tmp_path):
+    custom = tmp_path / "custom-facts.d"
+    custom.mkdir()
+    result = _resolve_facts_d(custom)
+    assert result == custom.resolve()
 
 
-def test_resolve_facts_d_falls_back_to_puppetlabs(tmp_path, monkeypatch):
-    """When primary doesn't exist, prefer /opt/puppetlabs if it does."""
-    monkeypatch.delenv("DPK_BASE", raising=False)
-    fake_puppetlabs = tmp_path / "puppetlabs"
-    fake_puppetlabs.mkdir()
-    with patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(fake_puppetlabs), "/etc/facter/facts.d"]):
-        result = _resolve_facts_d(tmp_path)
-    assert result == fake_puppetlabs
-
-
-def test_resolve_facts_d_returns_primary_when_none_exist(tmp_path, monkeypatch):
-    """If nothing exists, return the primary path so caller can create it."""
-    monkeypatch.delenv("DPK_BASE", raising=False)
-    with patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", ["/nonexistent/a", "/nonexistent/b"]):
-        result = _resolve_facts_d(tmp_path)
-    assert result == tmp_path / "psft_puppet_agent" / "facter" / "facts.d"
-
-
-def test_resolve_facts_d_uses_dpk_base_env(tmp_path, monkeypatch):
-    base = tmp_path / "psft"
-    base.mkdir()
-    monkeypatch.setenv("DPK_BASE", str(base))
-    with patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", []):
+def test_resolve_facts_d_prefers_first_existing(tmp_path):
+    first = tmp_path / "etc-puppetlabs"
+    second = tmp_path / "etc-facter"
+    first.mkdir()
+    second.mkdir()
+    with patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(first), str(second)]):
         result = _resolve_facts_d(None)
-    assert result == base / "psft_puppet_agent" / "facter" / "facts.d"
+    assert result == first
+
+
+def test_resolve_facts_d_skips_missing_to_existing(tmp_path):
+    """If first candidate is missing but second exists, use the second."""
+    second = tmp_path / "etc-facter"
+    second.mkdir()
+    with patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", ["/nonexistent/a", str(second)]):
+        result = _resolve_facts_d(None)
+    assert result == second
+
+
+def test_resolve_facts_d_returns_first_when_none_exist():
+    """If no candidate exists, return the first (preferred) path so caller can mkdir."""
+    with patch(
+        "psa.commands.dpk.facts.FACTS_D_CANDIDATES",
+        ["/nonexistent/etc-puppetlabs", "/nonexistent/etc-facter"],
+    ):
+        result = _resolve_facts_d(None)
+    assert str(result) == "/nonexistent/etc-puppetlabs"
 
 
 # --- facts init ---
@@ -95,7 +96,11 @@ def _set_facts_d(monkeypatch, tmp_path):
     """Make _resolve_facts_d resolve to <tmp_path>/facts.d/."""
     facts_d = tmp_path / "facts.d"
     facts_d.mkdir()
-    monkeypatch.setattr("psa.commands.dpk.facts._resolve_facts_d", lambda dpk_path: facts_d)
+    monkeypatch.setattr("psa.commands.dpk.facts._resolve_facts_d", lambda facts_dir: facts_d)
+    monkeypatch.setattr(
+        "psa.commands.dpk.facts._find_existing_server_yaml",
+        lambda facts_dir, fileops: facts_d / "server.yaml" if (facts_d / "server.yaml").exists() else None,
+    )
     return facts_d
 
 
@@ -283,20 +288,60 @@ def test_list_missing_file_human(tmp_path, monkeypatch):
     _set_facts_d(monkeypatch, tmp_path)
     config = PsaConfig(sudo_enabled=False)
 
-    with patch("psa.commands.dpk.facts.get_config", return_value=config):
+    with patch("psa.commands.dpk.facts.get_config", return_value=config), \
+         patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", ["/nonexistent/a", "/nonexistent/b"]):
+        # Override the helper to actually search candidates so we exercise the not-found path
+        monkeypatch.undo()
         result = runner.invoke(dpk_app, ["facts", "list"])
 
     assert result.exit_code != 0
+    assert "no server.yaml found" in result.output.lower()
+    assert "/nonexistent/a/server.yaml" in result.output
+    assert "/nonexistent/b/server.yaml" in result.output
     assert "psa dpk facts init" in result.output.lower()
 
 
 def test_list_missing_file_json(tmp_path, monkeypatch):
-    _set_facts_d(monkeypatch, tmp_path)
     config = PsaConfig(sudo_enabled=False)
 
-    with patch("psa.commands.dpk.facts.get_config", return_value=config):
+    with patch("psa.commands.dpk.facts.get_config", return_value=config), \
+         patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", ["/nonexistent/a"]):
         result = runner.invoke(dpk_app, ["facts", "list", "--json"])
 
     assert result.exit_code != 0
     data = json.loads(result.output)
     assert data["facts"] is None
+    assert data["path"] is None
+    assert data["searched"] == ["/nonexistent/a/server.yaml"]
+
+
+def test_list_facts_dir_override(tmp_path):
+    """--facts-dir reads from explicit path."""
+    custom = tmp_path / "custom"
+    custom.mkdir()
+    (custom / "server.yaml").write_text("ps_role: web\n")
+
+    config = PsaConfig(sudo_enabled=False)
+    with patch("psa.commands.dpk.facts.get_config", return_value=config):
+        result = runner.invoke(dpk_app, ["facts", "list", "--facts-dir", str(custom)])
+
+    assert result.exit_code == 0
+    assert "ps_role: web" in result.output
+
+
+def test_init_facts_dir_override(tmp_path):
+    """--facts-dir writes to explicit path."""
+    custom = tmp_path / "custom"
+    custom.mkdir()
+    config = PsaConfig(sudo_enabled=False)
+
+    with patch("psa.commands.dpk.facts.get_config", return_value=config):
+        result = runner.invoke(
+            dpk_app,
+            ["facts", "init", "--role", "mid", "--facts-dir", str(custom)],
+        )
+
+    assert result.exit_code == 0, result.output
+    assert (custom / "server.yaml").exists()
+    data = yaml.safe_load((custom / "server.yaml").read_text())
+    assert data == {"ps_role": "mid"}

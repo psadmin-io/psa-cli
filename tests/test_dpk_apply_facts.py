@@ -16,41 +16,62 @@ runner = CliRunner()
 # --- _read_server_facts ---
 
 
-def test_read_server_facts_prefers_dpk_base(tmp_path):
-    facts_d = tmp_path / "psft_puppet_agent" / "facter" / "facts.d"
-    facts_d.mkdir(parents=True)
+def test_read_server_facts_finds_in_first_candidate(tmp_path):
+    facts_d = tmp_path / "etc-puppetlabs"
+    facts_d.mkdir()
     (facts_d / "server.yaml").write_text("ps_role: mid\nenv: FSCMDEV\n")
 
     config = PsaConfig(sudo_enabled=False)
-    result = _read_server_facts(tmp_path, config)
+    with patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
+        result = _read_server_facts(config)
     assert result == {"ps_role": "mid", "env": "FSCMDEV"}
 
 
 def test_read_server_facts_returns_empty_when_missing(tmp_path):
     config = PsaConfig(sudo_enabled=False)
-    result = _read_server_facts(tmp_path, config)
+    with patch(
+        "psa.commands.dpk.facts.FACTS_D_CANDIDATES",
+        [str(tmp_path / "missing-a"), str(tmp_path / "missing-b")],
+    ):
+        result = _read_server_facts(config)
     assert result == {}
 
 
 def test_read_server_facts_returns_empty_on_invalid_yaml(tmp_path):
-    facts_d = tmp_path / "psft_puppet_agent" / "facter" / "facts.d"
-    facts_d.mkdir(parents=True)
+    facts_d = tmp_path / "etc-puppetlabs"
+    facts_d.mkdir()
     (facts_d / "server.yaml").write_text(": :: bogus :::: yaml")
 
     config = PsaConfig(sudo_enabled=False)
-    result = _read_server_facts(tmp_path, config)
+    with patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
+        result = _read_server_facts(config)
     assert result == {}
 
 
 def test_read_server_facts_handles_non_dict_yaml(tmp_path):
     """If server.yaml is e.g. a list, return empty dict (don't crash)."""
-    facts_d = tmp_path / "psft_puppet_agent" / "facter" / "facts.d"
-    facts_d.mkdir(parents=True)
+    facts_d = tmp_path / "etc-puppetlabs"
+    facts_d.mkdir()
     (facts_d / "server.yaml").write_text("- one\n- two\n")
 
     config = PsaConfig(sudo_enabled=False)
-    result = _read_server_facts(tmp_path, config)
+    with patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
+        result = _read_server_facts(config)
     assert result == {}
+
+
+def test_read_server_facts_falls_back_to_second_candidate(tmp_path):
+    """If first candidate is empty, find the file in the second."""
+    first = tmp_path / "etc-puppetlabs"
+    second = tmp_path / "etc-facter"
+    first.mkdir()
+    second.mkdir()
+    (second / "server.yaml").write_text("ps_role: app\n")
+
+    config = PsaConfig(sudo_enabled=False)
+    with patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(first), str(second)]):
+        result = _read_server_facts(config)
+    assert result == {"ps_role": "app"}
 
 
 # --- apply integration: precedence and FACTER_* env vars ---
@@ -58,14 +79,11 @@ def test_read_server_facts_handles_non_dict_yaml(tmp_path):
 
 @pytest.fixture
 def fake_dpk(tmp_path):
-    """Build a minimal DPK tree that satisfies apply's path checks.
+    """Build a minimal DPK tree that satisfies apply's path checks plus an
+    isolated facts.d so server.yaml writes don't touch /etc.
 
-    apply uses resolved_path.parent to locate psft_puppet_agent, so the
-    structure is:
-        <tmp_path>/
-            psft/                       <- --dpk-path target (resolved_path)
-                puppet/production/manifests/site.pp
-            psft_puppet_agent/bin/puppet  <- found at resolved_path.parent
+    Returns (dpk_root, facts_d) — facts_d is a tmp dir patched into
+    FACTS_D_CANDIDATES for the test's duration.
     """
     dpk = tmp_path / "psft"
     puppet_dir = dpk / "puppet"
@@ -75,18 +93,19 @@ def fake_dpk(tmp_path):
     puppet_bin.parent.mkdir(parents=True)
     puppet_bin.write_text("#!/bin/sh\nexit 0\n")
     puppet_bin.chmod(0o755)
-    return dpk
+    facts_d = tmp_path / "etc-puppetlabs-facts.d"
+    facts_d.mkdir()
+    return dpk, facts_d
 
 
-def _write_server_yaml(dpk: Path, content: str) -> None:
-    """Write server.yaml under <dpk_base>.parent/psft_puppet_agent (matches apply's layout)."""
-    facts_d = dpk.parent / "psft_puppet_agent" / "facter" / "facts.d"
-    facts_d.mkdir(parents=True, exist_ok=True)
+def _write_server_yaml(facts_d: Path, content: str) -> None:
+    """Write server.yaml into the test's isolated facts.d directory."""
     (facts_d / "server.yaml").write_text(content)
 
 
-def _invoke_apply(dpk, extra_args=None, config=None):
+def _invoke_apply(fake_dpk, extra_args=None, config=None):
     """Run psa dpk apply with subprocess.run mocked so puppet doesn't actually execute."""
+    dpk, facts_d = fake_dpk
     if config is None:
         config = PsaConfig(ops=OpsConfig(), sudo_enabled=False)
 
@@ -104,7 +123,8 @@ def _invoke_apply(dpk, extra_args=None, config=None):
         args += extra_args
 
     with patch("psa.commands.dpk.core.get_config", return_value=config), \
-         patch("psa.commands.dpk.core.subprocess.run", side_effect=fake_run):
+         patch("psa.commands.dpk.core.subprocess.run", side_effect=fake_run), \
+         patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
         result = runner.invoke(dpk_app, args)
 
     return result, captured.get("facter", {})
@@ -126,7 +146,7 @@ def test_apply_cli_flag_sets_facter(fake_dpk):
 
 def test_apply_server_yaml_skips_facter(fake_dpk):
     """When server.yaml has the fact and no CLI flag, FACTER_* is NOT set."""
-    _write_server_yaml(fake_dpk, "ps_role: mid\nenv: FSCMDEV\nps_tier: DEV\n")
+    _write_server_yaml(fake_dpk[1],"ps_role: mid\nenv: FSCMDEV\nps_tier: DEV\n")
     result, facter = _invoke_apply(fake_dpk)
     assert result.exit_code == 0
     assert facter == {}
@@ -137,7 +157,7 @@ def test_apply_server_yaml_skips_facter(fake_dpk):
 
 def test_apply_cli_flag_overrides_server_yaml(fake_dpk):
     """CLI --role overrides ps_role from server.yaml; other facts still left to Facter."""
-    _write_server_yaml(fake_dpk, "ps_role: mid\nenv: FSCMDEV\nps_tier: DEV\n")
+    _write_server_yaml(fake_dpk[1],"ps_role: mid\nenv: FSCMDEV\nps_tier: DEV\n")
     result, facter = _invoke_apply(fake_dpk, ["--role", "web"])
     assert result.exit_code == 0
     # Only ps_role should be set as FACTER_ override
@@ -158,7 +178,7 @@ def test_apply_config_default_used_when_no_server_yaml(fake_dpk):
 
 def test_apply_server_yaml_takes_precedence_over_config_default(fake_dpk):
     """server.yaml wins over config.ops.tier."""
-    _write_server_yaml(fake_dpk, "ps_tier: DEV\n")
+    _write_server_yaml(fake_dpk[1],"ps_tier: DEV\n")
     config = PsaConfig(
         ops=OpsConfig(tier="PRD"),  # Should be ignored — server.yaml has ps_tier
         sudo_enabled=False,
@@ -172,7 +192,7 @@ def test_apply_server_yaml_takes_precedence_over_config_default(fake_dpk):
 
 def test_apply_mixed_sources(fake_dpk):
     """CLI overrides one fact, server.yaml supplies another, config default fills a third."""
-    _write_server_yaml(fake_dpk, "ps_role: mid\n")
+    _write_server_yaml(fake_dpk[1],"ps_role: mid\n")
     config = PsaConfig(
         ops=OpsConfig(zone="prod"),
         sudo_enabled=False,

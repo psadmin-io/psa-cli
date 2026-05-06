@@ -177,23 +177,19 @@ app = typer.Typer(
 )
 
 
-def _read_server_facts(dpk_base: Path, config: PsaConfig) -> dict:
+def _read_server_facts(config: PsaConfig) -> dict:
     """Read facts from <facts.d>/server.yaml. Empty dict if missing or unreadable.
 
-    Tries both `<dpk_base>/psft_puppet_agent/...` and `<dpk_base>.parent/psft_puppet_agent/...`
-    so it works whether the caller passes the install root or the dpk/ subdir.
-    Also falls back to system-wide /opt/puppetlabs and /etc/facter locations.
+    Searches the same standard system paths as `psa dpk facts` writes to
+    (FACTS_D_CANDIDATES from facts.py). Server identity lives in /etc/, not
+    the DPK install tree.
     """
     import yaml as _yaml
 
+    from psa.commands.dpk.facts import FACTS_D_CANDIDATES
     from psa.core.fileops import SudoFileOps
 
-    candidates = [
-        dpk_base / "psft_puppet_agent" / "facter" / "facts.d" / "server.yaml",
-        dpk_base.parent / "psft_puppet_agent" / "facter" / "facts.d" / "server.yaml",
-        Path("/opt/puppetlabs/facter/facts.d/server.yaml"),
-        Path("/etc/facter/facts.d/server.yaml"),
-    ]
+    candidates = [Path(d) / "server.yaml" for d in FACTS_D_CANDIDATES]
     fileops = SudoFileOps(config)
     for candidate in candidates:
         content = fileops.read_text(candidate)
@@ -967,7 +963,7 @@ def apply(
     # Load config and read server.yaml (Facter external facts).
     config = get_config()
     ops = config.ops
-    server_facts = _read_server_facts(resolved_path, config)
+    server_facts = _read_server_facts(config)
 
     # Capture which CLI flags were explicitly set before defaults are applied.
     cli_provided = {
