@@ -1261,6 +1261,18 @@ def _default_fileops() -> SudoFileOps:
     return SudoFileOps(PsaConfig(sudo_enabled=False))
 
 
+def _write_with_escalation(path: Path, content: str, fileops: SudoFileOps) -> bool:
+    """Try writing as runtime_user, then escalate to root.
+
+    DPK_HOME is often root-owned (Oracle's psft-dpk-setup.sh runs as root),
+    in which case sudo'ing as runtime_user (psadm2) still can't write. Fall
+    back to `sudo bash -c` for those cases.
+    """
+    if fileops.write_text(path, content):
+        return True
+    return fileops.write_text(path, content, as_root=True)
+
+
 def _backup_and_write(
     target: Path, content: str, fileops: SudoFileOps
 ) -> bool:
@@ -1268,12 +1280,12 @@ def _backup_and_write(
     backup = target.with_suffix(target.suffix + ".bak")
     existing = fileops.read_text(target)
     if existing is not None:
-        if not fileops.write_text(backup, existing):
+        if not _write_with_escalation(backup, existing, fileops):
             print_error(f"Failed to back up {target} -> {backup}")
             if getattr(fileops, "last_error", None):
                 print_info(fileops.last_error)
             return False
-    if not fileops.write_text(target, content):
+    if not _write_with_escalation(target, content, fileops):
         print_error(f"Failed to write {target}")
         if getattr(fileops, "last_error", None):
             print_info(fileops.last_error)

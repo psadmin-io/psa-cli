@@ -587,6 +587,52 @@ def test_dpk_base_config_field_round_trip(tmp_path):
     assert loaded.dpk_base == Path("/opt/oracle/psft")
 
 
+def test_sync_escalates_to_root_when_runtime_user_cant_write(dpk_tree, tmp_path, monkeypatch):
+    """When runtime_user sudo write fails (root-owned dir), escalate to sudo bash -c."""
+    cust = tmp_path / "cust"
+    cust.mkdir()
+    monkeypatch.setenv("DPK_CUST_HOME", str(cust))
+    monkeypatch.delenv("PSA_KIT", raising=False)
+    monkeypatch.setenv("USER", "opc")
+
+    config = PsaConfig(sudo_enabled=True, runtime_user="psadm2")
+
+    sudo_calls = []
+
+    def fake_subprocess_run(cmd, **kwargs):
+        sudo_calls.append(cmd)
+        # Reads (sudo su - psadm2 -c "cat ...") return empty stdout (file missing is fine).
+        if cmd[:2] == ["sudo", "su"] and "cat " in cmd[-1]:
+            return MagicMock(returncode=1, stdout="", stderr="No such file\n")
+        # Writes via sudo su - psadm2 fail (psadm2 not owner of root-owned dir)
+        if cmd[:2] == ["sudo", "su"]:
+            return MagicMock(returncode=1, stdout="", stderr="Permission denied\n")
+        # Writes via sudo bash succeed (root)
+        if cmd[:3] == ["sudo", "bash", "-c"]:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return MagicMock(returncode=1, stdout="", stderr="unexpected\n")
+
+    # Force the as_root=True direct-write attempt to also fail so the sudo bash path runs.
+    real_write_text = Path.write_text
+
+    def fake_write_text(self, *args, **kwargs):
+        if "puppet" in str(self):
+            raise PermissionError(f"mock denied: {self}")
+        return real_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fake_write_text)
+
+    with patch("psa.commands.dpk.core.get_config", return_value=config), \
+         patch("psa.core.fileops.subprocess.run", side_effect=fake_subprocess_run):
+        result = runner.invoke(dpk_app, ["sync", "--dpk-home", str(dpk_tree)])
+
+    assert result.exit_code == 0, result.output
+    runtime_calls = [c for c in sudo_calls if c[:2] == ["sudo", "su"]]
+    root_calls = [c for c in sudo_calls if c[:3] == ["sudo", "bash", "-c"]]
+    assert runtime_calls, f"expected sudo su attempts, got {sudo_calls}"
+    assert root_calls, f"expected sudo bash escalation, got {sudo_calls}"
+
+
 def test_sync_falls_back_to_sudo_when_direct_write_denied(dpk_tree, tmp_path, monkeypatch):
     """When DPK_HOME is not writable, sync uses sudo via SudoFileOps."""
     cust = tmp_path / "cust"
