@@ -181,6 +181,70 @@ def test_install_invalid_repo_format(tmp_path, monkeypatch):
     assert "invalid org/repo" in result.output
 
 
+def test_install_as_overrides_target_dir(tmp_path, monkeypatch):
+    """--as <name> overrides the target directory name."""
+    monkeypatch.delenv("DPK_CUST_HOME", raising=False)
+    fake_clone = MagicMock(return_value=_ok())
+    monkeypatch.setattr("psa.commands.dpk.module._git", fake_clone)
+
+    with patch("psa.commands.dpk.module.get_config", return_value=PsaConfig()):
+        result = runner.invoke(
+            dpk_app,
+            [
+                "module", "install", "puppetlabs/puppetlabs-inifile",
+                "--as", "inifile",
+                "--path", str(tmp_path / "cust"),
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    args = fake_clone.call_args[0][0]
+    expected_target = str(tmp_path / "cust" / "modules" / "inifile")
+    assert expected_target in args
+    # Default name (puppetlabs-inifile) should NOT be the target
+    default_target = str(tmp_path / "cust" / "modules" / "puppetlabs-inifile")
+    assert default_target not in args
+
+
+def test_install_as_rejects_multiple_repos(tmp_path, monkeypatch):
+    """--as with more than one repo is an error."""
+    monkeypatch.delenv("DPK_CUST_HOME", raising=False)
+    fake_clone = MagicMock()
+    monkeypatch.setattr("psa.commands.dpk.module._git", fake_clone)
+
+    with patch("psa.commands.dpk.module.get_config", return_value=PsaConfig()):
+        result = runner.invoke(
+            dpk_app,
+            [
+                "module", "install", "foo/a", "foo/b",
+                "--as", "shared",
+                "--path", str(tmp_path / "c"),
+            ],
+        )
+    assert result.exit_code != 0
+    fake_clone.assert_not_called()
+    assert "exactly one repo" in result.output
+
+
+def test_install_as_rejects_bad_name(tmp_path, monkeypatch):
+    """--as rejects names that could escape the modules dir."""
+    monkeypatch.delenv("DPK_CUST_HOME", raising=False)
+    fake_clone = MagicMock()
+    monkeypatch.setattr("psa.commands.dpk.module._git", fake_clone)
+
+    with patch("psa.commands.dpk.module.get_config", return_value=PsaConfig()):
+        result = runner.invoke(
+            dpk_app,
+            [
+                "module", "install", "foo/bar",
+                "--as", "../etc",
+                "--path", str(tmp_path / "c"),
+            ],
+        )
+    assert result.exit_code != 0
+    fake_clone.assert_not_called()
+    assert "invalid --as name" in result.output.lower()
+
+
 def test_install_clone_failure_cleans_up(tmp_path, monkeypatch):
     monkeypatch.delenv("DPK_CUST_HOME", raising=False)
     cust = tmp_path / "cust"

@@ -18,6 +18,7 @@ from psa.core.output import print_error, print_info, print_success, print_warnin
 console = Console()
 
 REPO_PATTERN = re.compile(r"^[\w.-]+/[\w.-]+$")
+NAME_PATTERN = re.compile(r"^[\w.][\w.-]*$")
 GITHUB_HTTPS = "https://github.com/{repo}.git"
 
 app = typer.Typer(
@@ -67,6 +68,11 @@ def install(
         "--branch",
         help="Git branch to clone",
     ),
+    as_name: Optional[str] = typer.Option(
+        None,
+        "--as",
+        help="Override target directory name (only valid with a single repo)",
+    ),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -78,14 +84,25 @@ def install(
     Clone one or more Puppet modules from GitHub via HTTPS.
 
     Modules are cloned shallow (--depth 1) into <DPK_CUST_HOME>/modules/<repo_name>/.
+    By default the target dir is the repo's name (puppetlabs/puppetlabs-inifile -> puppetlabs-inifile).
+    Use --as to override (e.g. for Puppet's modulepath, which expects bare module names).
     If a module directory already exists, it is skipped (no overwrite).
 
     Examples:
         psa dpk module install psadmin-io/io_role
         psa dpk module install psadmin-io/io_role psadmin-io/io_portalwar
         psa dpk module install psadmin-io/io_role --branch develop
+        psa dpk module install puppetlabs/puppetlabs-inifile --as inifile
         psa dpk module install psadmin-io/io_role --dry-run
     """
+    if as_name is not None:
+        if len(repos) != 1:
+            print_error("--as requires exactly one repo argument")
+            raise typer.Exit(1)
+        if not NAME_PATTERN.match(as_name):
+            print_error(f"Invalid --as name: {as_name!r} (allowed: letters, digits, '_', '-', '.')")
+            raise typer.Exit(1)
+
     dpk_cust = _resolve_dpk_cust_home(path)
     modules_dir = dpk_cust / "modules"
 
@@ -101,7 +118,7 @@ def install(
             failed += 1
             continue
 
-        repo_name = repo.split("/", 1)[1]
+        repo_name = as_name if as_name else repo.split("/", 1)[1]
         target = modules_dir / repo_name
 
         if target.exists() and any(target.iterdir()):
