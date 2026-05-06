@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Union
+from typing import List, NamedTuple, Optional, Union
 
 import typer
 from rich.console import Console
@@ -17,11 +17,21 @@ from psa.core.output import print_error, print_info, print_json, print_success, 
 
 console = Console()
 
-# DPK prerequisite libraries
-DPK_REQUIRED_LIBS = [
-    "/lib64/libncursesw.so.5",
-    "/usr/lib64/libncursesw.so.5",
+# DPK prerequisite libraries: ncurses .5 family expected by Oracle's bundled
+# Python/Ruby and the DPK setup script. EL 7/8 ship these via ncurses-compat-libs;
+# EL 9+ omits the package and we symlink the .6 libs (ncurses-libs) instead.
+NCURSES_LIB_NAMES = [
+    "libncursesw.so.5",
+    "libtinfo.so.5",
+    "libncurses.so.5",
+    "libform.so.5",
+    "libpanel.so.5",
+    "libmenu.so.5",
 ]
+
+LIB_SEARCH_DIRS = ["/usr/lib64", "/lib64"]
+
+OS_RELEASE_PATH = "/etc/os-release"
 
 # Tuxedo/OUI prerequisite libraries (for middleware installs)
 # Note: Actual requirements vary by OS version
@@ -29,6 +39,11 @@ TUXEDO_REQUIRED_LIBS = {
     "libaio.so.1": ["/lib64/libaio.so.1", "/usr/lib64/libaio.so.1"],
     "libnsl.so.1": ["/lib64/libnsl.so.1", "/usr/lib64/libnsl.so.1"],
 }
+
+
+class FixAction(NamedTuple):
+    description: str
+    command: List[str]
 
 # Patterns to detect first DPK zip (in priority order)
 FIRST_ZIP_PATTERNS = [
@@ -1039,76 +1054,138 @@ def apply(
         raise typer.Exit(1)
 
 
+def _detect_os_major_version() -> Optional[int]:
+    """Parse the major VERSION_ID from /etc/os-release. Returns int or None."""
+    try:
+        text = Path(OS_RELEASE_PATH).read_text()
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith("VERSION_ID="):
+            value = line.split("=", 1)[1].strip().strip('"').strip("'")
+            try:
+                return int(value.split(".")[0])
+            except (ValueError, IndexError):
+                return None
+    return None
+
+
+def _find_lib(name: str) -> Optional[Path]:
+    """Return the path to a system library if found in any LIB_SEARCH_DIRS."""
+    for d in LIB_SEARCH_DIRS:
+        p = Path(d) / name
+        if p.exists():
+            return p
+    return None
+
+
+def _sudo_prefix() -> List[str]:
+    return [] if os.geteuid() == 0 else ["sudo"]
+
+
+def _plan_ncurses_fix(
+    missing: List[str], os_major: Optional[int]
+) -> List[FixAction]:
+    """Plan fix actions for missing ncurses .5 libs based on OS version."""
+    if not missing:
+        return []
+
+    # EL 7/8 (or unknown): ncurses-compat-libs covers all .5 libs in one shot
+    if os_major is None or os_major < 9:
+        cmd = _sudo_prefix() + ["dnf", "install", "-y", "ncurses-compat-libs"]
+        return [FixAction("Install ncurses-compat-libs", cmd)]
+
+    # EL 9+: per-lib symlink to the .6 from ncurses-libs
+    actions: List[FixAction] = []
+    needs_libs = any(
+        _find_lib(name.replace(".so.5", ".so.6")) is None for name in missing
+    )
+    if needs_libs:
+        cmd = _sudo_prefix() + ["dnf", "install", "-y", "ncurses-libs"]
+        actions.append(FixAction("Install ncurses-libs (provides .6 libs)", cmd))
+
+    for name in missing:
+        target_name = name.replace(".so.5", ".so.6")
+        target = _find_lib(target_name) or Path("/usr/lib64") / target_name
+        link = target.parent / name
+        cmd = _sudo_prefix() + ["ln", "-s", str(target), str(link)]
+        actions.append(FixAction(f"Symlink {name} -> {target.name}", cmd))
+
+    return actions
+
+
 def _check_dpk_prerequisites(
     deploy_type: DeployType = DeployType.all, fix: bool = False
 ) -> None:
-    """Check DPK prerequisites are installed. Optionally auto-install missing packages."""
-    missing = []
-    install_pkgs = []
+    """Check DPK prerequisites; with --fix, install/symlink missing libs.
 
-    # Check for ncurses library (required by DPK bundled Python/Ruby)
-    ncurses_found = False
-    for lib_path in DPK_REQUIRED_LIBS:
-        if Path(lib_path).exists():
-            ncurses_found = True
-            break
+    On EL 9+ the .5 ncurses libs are not packaged; falls back to symlinking
+    the existing .6 libs (from ncurses-libs). On EL 7/8 installs ncurses-compat-libs.
+    """
+    os_major = _detect_os_major_version()
 
-    if not ncurses_found:
-        missing.append("libncursesw.so.5")
-        install_pkgs.append("ncurses-compat-libs")
+    missing_ncurses = [n for n in NCURSES_LIB_NAMES if _find_lib(n) is None]
 
-    # Check Tuxedo/OUI libs if installing middleware
+    missing_tuxedo: List[str] = []
     if deploy_type != DeployType.tools_home:
         for lib_name, lib_paths in TUXEDO_REQUIRED_LIBS.items():
-            lib_found = False
-            for lib_path in lib_paths:
-                if Path(lib_path).exists():
-                    lib_found = True
-                    break
-            if not lib_found:
-                missing.append(lib_name)
-                pkg_map = {"libaio.so.1": "libaio", "libnsl.so.1": "libnsl"}
-                if lib_name in pkg_map:
-                    install_pkgs.append(pkg_map[lib_name])
+            if not any(Path(p).exists() for p in lib_paths):
+                missing_tuxedo.append(lib_name)
 
-    if missing:
-        print_error("Missing DPK prerequisites:")
-        for lib in missing:
-            console.print(f"  [red]✗[/red] {lib}")
-        console.print()
+    if not missing_ncurses and not missing_tuxedo:
+        print_success("DPK prerequisites OK")
+        return
 
-        if install_pkgs:
-            dnf_cmd = ["dnf", "install", "-y"] + install_pkgs
-            if os.geteuid() != 0:
-                dnf_cmd = ["sudo"] + dnf_cmd
+    print_error("Missing DPK prerequisites:")
+    for lib in missing_ncurses:
+        console.print(f"  [red]✗[/red] {lib}")
+    for lib in missing_tuxedo:
+        console.print(f"  [red]✗[/red] {lib}")
+    console.print()
 
-            should_install = fix
-            if not fix:
-                print_info(f"Install command: {' '.join(dnf_cmd)}")
-                should_install = typer.confirm("Install missing packages?")
+    ncurses_actions = _plan_ncurses_fix(missing_ncurses, os_major)
+    if ncurses_actions and os_major is not None and os_major >= 9:
+        print_info(
+            f"On EL {os_major}+, ncurses-compat-libs is not packaged; "
+            "fix uses symlinks to existing .6 libs."
+        )
 
-            if should_install:
-                print_info(f"Running: {' '.join(dnf_cmd)}")
-                result = subprocess.run(dnf_cmd)
-                if result.returncode != 0:
-                    print_error("Package install failed")
-                    raise typer.Exit(1)
-                print_success("Prerequisites installed")
-                return
-            else:
-                raise typer.Exit(1)
+    if ncurses_actions:
+        print_info("Fix plan:")
+        for action in ncurses_actions:
+            console.print(f"  [cyan]{' '.join(action.command)}[/cyan]")
 
-        # Additional guidance for OUI/middleware installs
-        if deploy_type != DeployType.tools_home:
-            console.print()
-            print_warning("Oracle Universal Installer (OUI) may require additional dependencies")
-            print_info("For Oracle Linux/RHEL 8+, consider:")
-            print_info("  dnf install oracle-database-preinstall-19c")
-            print_info("Or check Oracle Support Doc 2617023.1 for PeopleTools prerequisites")
+    pkg_map = {"libaio.so.1": "libaio", "libnsl.so.1": "libnsl"}
+    tuxedo_pkgs = [pkg_map[n] for n in missing_tuxedo if n in pkg_map]
+    tuxedo_cmd: Optional[List[str]] = None
+    if tuxedo_pkgs:
+        tuxedo_cmd = _sudo_prefix() + ["dnf", "install", "-y"] + tuxedo_pkgs
+        print_info(f"Install command: [cyan]{' '.join(tuxedo_cmd)}[/cyan]")
 
+    console.print()
+    should_fix = fix
+    if not fix:
+        should_fix = typer.confirm("Apply fixes?")
+
+    if not should_fix:
         raise typer.Exit(1)
 
-    print_success("DPK prerequisites OK")
+    for action in ncurses_actions:
+        print_info(f"Running: {' '.join(action.command)}")
+        result = subprocess.run(action.command)
+        if result.returncode != 0:
+            print_error(f"Failed: {action.description}")
+            print_info(f"Run manually: {' '.join(action.command)}")
+            raise typer.Exit(1)
+
+    if tuxedo_cmd:
+        print_info(f"Running: {' '.join(tuxedo_cmd)}")
+        result = subprocess.run(tuxedo_cmd)
+        if result.returncode != 0:
+            print_error("Package install failed")
+            raise typer.Exit(1)
+
+    print_success("Prerequisites installed")
 
 
 def _parse_manifest(manifest_path: Path) -> dict:
