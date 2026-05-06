@@ -15,6 +15,8 @@ from psa.commands.dpk.init import dpk_init
 
 # Import subcommands
 from psa.commands.dpk import data
+from psa.commands.dpk import facts
+from psa.commands.dpk import module
 from psa.commands.dpk import repo
 
 # Create main dpk app
@@ -35,4 +37,6 @@ app.command("sync")(sync)
 
 # Add subgroups (data is hidden; still callable explicitly)
 app.add_typer(data.app, name="data", hidden=True)
+app.add_typer(facts.app, name="facts")
+app.add_typer(module.app, name="module")
 app.add_typer(repo.app, name="repo")

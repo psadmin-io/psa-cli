@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import subprocess
 from pathlib import Path
@@ -93,6 +94,43 @@ class SudoFileOps:
             return result.stdout
         except Exception:
             return None
+
+    def write_text(self, path: Path, content: str, *, as_root: bool = False) -> bool:
+        """Write text to a file. Returns True on success.
+
+        Tries a direct write first. If that fails with a permission error, falls
+        back to sudo: as `sudo su - <runtime_user>` by default, or as
+        `sudo bash -c` when as_root=True (needed for root-owned paths such as
+        Puppet's facts.d/). Content is base64-encoded over the wire to avoid
+        shell-escaping pitfalls.
+        """
+        # Try direct write first when we don't already know sudo is required.
+        if as_root or not self._needs_sudo():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+                return True
+            except (PermissionError, OSError):
+                if not as_root and not self._needs_sudo():
+                    # No elevation requested and direct failed — give up.
+                    return False
+                # Fall through to sudo path
+
+        b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        inner = f"mkdir -p {path.parent} && echo {b64} | base64 -d > {path}"
+
+        if as_root:
+            full_cmd = ["sudo", "bash", "-c", inner]
+        else:
+            full_cmd = ["sudo", "su", "-", self.config.runtime_user, "-c", inner]
+
+        try:
+            result = subprocess.run(
+                full_cmd, capture_output=True, text=True, timeout=30
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
 
     def stat_size(self, path: Path) -> Optional[int]:
         """Get file size in bytes."""
