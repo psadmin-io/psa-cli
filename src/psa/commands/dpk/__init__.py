@@ -31,6 +31,6 @@ app.command("stage")(stage)
 app.command("status")(status)
 app.command("sync")(sync)
 
-# Add subgroups
-app.add_typer(data.app, name="data")
+# Add subgroups (data is hidden; still callable explicitly)
+app.add_typer(data.app, name="data", hidden=True)
 app.add_typer(repo.app, name="repo")
