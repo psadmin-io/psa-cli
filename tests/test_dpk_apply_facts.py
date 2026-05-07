@@ -1,7 +1,7 @@
 """Tests for psa dpk apply integration with facts.d/server.yaml."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from typer.testing import CliRunner
@@ -103,27 +103,29 @@ def _write_server_yaml(facts_d: Path, content: str) -> None:
     (facts_d / "server.yaml").write_text(content)
 
 
-def _invoke_apply(fake_dpk, extra_args=None, config=None):
-    """Run psa dpk apply with subprocess.run mocked so puppet doesn't actually execute."""
+def _invoke_apply(fake_dpk, extra_args=None, config=None, fake_run=None):
+    """Run psa dpk apply with stream_subprocess mocked so puppet doesn't actually execute."""
     dpk, facts_d = fake_dpk
     if config is None:
         config = PsaConfig(ops=OpsConfig(), sudo_enabled=False)
 
     captured = {}
 
-    def fake_run(cmd, **kwargs):
+    def default_fake(cmd, **kwargs):
         # Capture the FACTER_* environment vars passed to puppet apply.
         if cmd and "puppet" in str(cmd[0]):
             env = kwargs.get("env", {}) or {}
             captured["facter"] = {k: v for k, v in env.items() if k.startswith("FACTER_")}
-        return MagicMock(returncode=0, stdout="", stderr="")
+        return (0, "", "")
+
+    side_effect = fake_run or default_fake
 
     args = ["apply", "--dpk-home", str(dpk)]
     if extra_args:
         args += extra_args
 
     with patch("psa.commands.dpk.core.get_config", return_value=config), \
-         patch("psa.commands.dpk.core.subprocess.run", side_effect=fake_run), \
+         patch("psa.commands.dpk.core.stream_subprocess", side_effect=side_effect), \
          patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
         result = runner.invoke(dpk_app, args)
 

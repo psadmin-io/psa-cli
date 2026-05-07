@@ -1,6 +1,7 @@
 """DPK lifecycle management commands."""
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -15,6 +16,7 @@ from rich.console import Console
 from psa.core.config import PsaConfig, get_config
 from psa.core.fileops import SudoFileOps
 from psa.core.output import print_error, print_info, print_json, print_success, print_warning
+from psa.core.subprocess_runner import print_stderr_on_failure, stream_subprocess
 
 console = Console()
 
@@ -149,19 +151,28 @@ def _generate_hiera_yaml(
 
     return "\n".join(lines) + "\n"
 
-# psa-ops site.pp template (role-based node classification)
-SITE_PP_TEMPLATE = """\
-node default {
-  case $facts[ps_role] {
-    'app':        { include ::io_role::io_tools_appserver }
-    'appbat':     { include ::io_role::io_tools_appbatch }
-    'web':        { include ::io_role::io_tools_pia }
-    'prcs':       { include ::io_role::io_tools_prcs }
-    'mid':        { include ::io_role::io_tools_midtier }
-    'webapp':     { include ::io_role::io_tools_webapp }
-  }
+# Role -> class included by site.pp. Source of truth for both the rendered
+# manifest below and the role-resolution announcement in `psa dpk apply`.
+ROLE_CLASS_MAP = {
+    "app": "io_role::io_tools_appserver",
+    "appbat": "io_role::io_tools_appbatch",
+    "web": "io_role::io_tools_pia",
+    "prcs": "io_role::io_tools_prcs",
+    "mid": "io_role::io_tools_midtier",
+    "webapp": "io_role::io_tools_webapp",
 }
-"""
+
+
+def _render_site_pp() -> str:
+    lines = ["node default {", "  case $facts[ps_role] {"]
+    for role, cls in ROLE_CLASS_MAP.items():
+        key = f"'{role}':"
+        lines.append(f"    {key:<13} {{ include ::{cls} }}")
+    lines += ["  }", "}", ""]
+    return "\n".join(lines)
+
+
+SITE_PP_TEMPLATE = _render_site_pp()
 
 
 class DeployType(str, Enum):
@@ -526,11 +537,15 @@ def setup(
         # so use shell pipe instead.
         shell_cmd = "echo n | " + " ".join(shlex.quote(c) for c in cmd)
         try:
-            result = subprocess.run(shell_cmd, shell=True, cwd=setup_script.parent, timeout=600)
-            if result.returncode == 0:
+            rc, _, _ = stream_subprocess(
+                ["sh", "-c", shell_cmd],
+                cwd=setup_script.parent,
+                timeout=600,
+            )
+            if rc == 0:
                 print_success("Prerequisites check completed")
             else:
-                print_error(f"Prerequisites check failed (exit {result.returncode})")
+                print_error(f"Prerequisites check failed (exit {rc})")
                 raise typer.Exit(1)
         except subprocess.TimeoutExpired:
             print_error("Prereq check timed out")
@@ -565,11 +580,11 @@ def setup(
             return
 
         try:
-            result = subprocess.run(cmd, cwd=setup_script.parent, timeout=600)
-            if result.returncode == 0:
+            rc, _, _ = stream_subprocess(cmd, cwd=setup_script.parent, timeout=600)
+            if rc == 0:
                 print_success("Post-configuration completed")
             else:
-                print_error(f"Post-configuration failed (exit {result.returncode})")
+                print_error(f"Post-configuration failed (exit {rc})")
                 raise typer.Exit(1)
         except subprocess.TimeoutExpired:
             print_error("Post-configuration timed out")
@@ -653,16 +668,16 @@ deploy_type={deploy_type.value}
 
         # Run setup script
         try:
-            result = subprocess.run(
+            rc, _, _ = stream_subprocess(
                 cmd,
                 cwd=setup_script.parent,
                 timeout=7200,  # 2 hour timeout
             )
-            if result.returncode == 0:
+            if rc == 0:
                 print_success("DPK setup completed successfully")
                 print_info(f"Next: psa dpk apply --dpk-home {base_path / 'dpk'}")
             else:
-                print_error(f"DPK setup failed (exit {result.returncode})")
+                print_error(f"DPK setup failed (exit {rc})")
                 raise typer.Exit(1)
         except subprocess.TimeoutExpired:
             print_error("Setup timed out (>2 hours)")
@@ -742,11 +757,11 @@ def cleanup(
         return
 
     try:
-        result = subprocess.run(cmd, cwd=setup_script.parent, timeout=600)
-        if result.returncode == 0:
+        rc, _, _ = stream_subprocess(cmd, cwd=setup_script.parent, timeout=600)
+        if rc == 0:
             print_success("DPK cleanup completed")
         else:
-            print_error(f"Cleanup failed (exit {result.returncode})")
+            print_error(f"Cleanup failed (exit {rc})")
             raise typer.Exit(1)
     except subprocess.TimeoutExpired:
         print_error("Cleanup timed out")
@@ -909,6 +924,12 @@ def apply(
         "-d",
         help="Puppet debug output",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Stream full puppet output (Info/Debug lines included)",
+    ),
     dpk_home: Optional[Path] = typer.Option(
         None,
         "--dpk-home",
@@ -927,7 +948,7 @@ def apply(
         psa dpk apply --role app
         psa dpk apply --env FSCMDEV --tier DEV
         psa dpk apply --dry-run
-        psa dpk apply --debug
+        psa dpk apply --verbose
     """
     # Resolve DPK_HOME (the dpk install dir)
     resolved_path = _resolve_dpk_home(dpk_home)
@@ -974,6 +995,9 @@ def apply(
         str(puppet_dir),
         "--environment",
         "production",
+        # Without this puppet exits 0 on every "noop with changes" or
+        # resource failure, masking real problems. See exit-code mapping below.
+        "--detailed-exitcodes",
         str(site_pp),
     ]
 
@@ -1048,29 +1072,94 @@ def apply(
     _set_facter("ps_zone", zone)
     _set_facter("ps_role", role)
 
+    # Role -> class announcement. The "0.03s catalog compile" silent-failure
+    # case usually reduces to: ps_role didn't match any case in site.pp, so
+    # nothing was included.
+    effective_role = role or server_facts.get("ps_role")
+    if effective_role:
+        cls = ROLE_CLASS_MAP.get(effective_role)
+        if cls:
+            print_info(f"Resolved ps_role={effective_role} -> {cls}")
+        else:
+            print_warning(
+                f"ps_role={effective_role!r} does not match any class in site.pp "
+                f"(known: {', '.join(ROLE_CLASS_MAP)}). Catalog will be empty."
+            )
+    else:
+        print_warning(
+            "ps_role is not set (no --role, no server.yaml, no config default). "
+            "Catalog will be empty."
+        )
+
     print_info(f"Running: {' '.join(cmd)}")
 
+    stdout_filter = None if verbose else _puppet_default_filter
     try:
-        result = subprocess.run(
+        rc, stdout_text, _stderr_text = stream_subprocess(
             cmd,
-            capture_output=False,
-            timeout=3600,
             cwd=puppet_dir,
             env=facter_env,
+            timeout=3600,
+            stdout_filter=stdout_filter,
         )
-        if result.returncode == 0:
-            print_success("Puppet apply completed successfully")
-        elif result.returncode == 2:
-            print_success("Puppet apply completed with changes")
-        else:
-            print_error(f"Puppet apply failed (exit {result.returncode})")
-            raise typer.Exit(1)
     except subprocess.TimeoutExpired:
         print_error("Puppet apply timed out (>1 hour)")
         raise typer.Exit(1)
     except FileNotFoundError:
         print_error("Puppet not found. Run 'psa dpk setup' first")
         raise typer.Exit(1)
+
+    _emit_catalog_diagnostics(stdout_text, rc, dry_run)
+
+    if rc == 0:
+        print_success("Puppet apply: no changes needed")
+    elif rc == 2 and dry_run:
+        print_success("Puppet apply: would make changes (dry-run)")
+    elif rc == 2:
+        print_success("Puppet apply: changes applied")
+    elif rc == 4:
+        print_error("Puppet apply completed with resource failures")
+        raise typer.Exit(1)
+    elif rc == 6:
+        print_error("Puppet apply applied changes but had resource failures")
+        raise typer.Exit(1)
+    elif rc == 1:
+        print_error("Puppet apply failed: catalog compilation or parse error")
+        raise typer.Exit(1)
+    else:
+        print_error(f"Puppet apply failed (exit {rc})")
+        raise typer.Exit(rc if rc > 0 else 1)
+
+
+# Lines starting with these prefixes are puppet's chatty output. By default
+# we drop them; --verbose passes everything through.
+_PUPPET_QUIET_PREFIXES = ("Info:", "Debug:")
+
+
+def _puppet_default_filter(line: str) -> bool:
+    return not line.lstrip().startswith(_PUPPET_QUIET_PREFIXES)
+
+
+_CATALOG_COMPILE_RE = re.compile(r"Compiled catalog .* in ([\d.]+) seconds")
+_NOTICE_CHANGE_RE = re.compile(r"^Notice: /Stage\[", re.MULTILINE)
+
+
+def _emit_catalog_diagnostics(stdout_text: str, rc: int, dry_run: bool) -> None:
+    """Surface change counts and warn about suspiciously fast compiles."""
+    match = _CATALOG_COMPILE_RE.search(stdout_text)
+    if match:
+        compile_s = float(match.group(1))
+        if compile_s < 0.5 and rc in (0, 2):
+            print_warning(
+                f"Catalog compiled in {compile_s}s - unusually fast; the role "
+                f"class may not have loaded. Check that ps_role matches a class "
+                f"in site.pp and that all required Hiera keys are defined."
+            )
+
+    changes = len(_NOTICE_CHANGE_RE.findall(stdout_text))
+    if changes:
+        verb = "Would change" if dry_run else "Changed"
+        print_info(f"{verb}: {changes} resources")
 
 
 def _detect_os_major_version() -> Optional[int]:
