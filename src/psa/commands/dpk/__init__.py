@@ -6,6 +6,7 @@ import typer
 from psa.commands.dpk.core import (
     apply,
     cleanup,
+    lookup,
     setup,
     stage,
     status,
@@ -30,6 +31,7 @@ app = typer.Typer(
 app.command("apply")(apply)
 app.command("cleanup")(cleanup)
 app.command("init")(dpk_init)
+app.command("lookup")(lookup)
 app.command("setup")(setup)
 app.command("stage")(stage)
 app.command("status")(status)

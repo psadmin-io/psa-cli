@@ -191,6 +191,134 @@ app = typer.Typer(
 )
 
 
+def _resolve_puppet_bin(resolved_path: Path) -> Path:
+    """Locate the puppet binary or exit with a friendly message.
+
+    Search order: DPK-bundled agent, /opt/puppetlabs, then $PATH.
+    """
+    dpk_base = resolved_path.parent  # e.g., /opt/oracle/psft
+    dpk_puppet = dpk_base / "psft_puppet_agent" / "bin" / "puppet"
+    if dpk_puppet.exists():
+        return dpk_puppet
+    if Path("/opt/puppetlabs/puppet/bin/puppet").exists():
+        return Path("/opt/puppetlabs/puppet/bin/puppet")
+    try:
+        result = subprocess.run(["which", "puppet"], capture_output=True, text=True)
+        if result.returncode == 0:
+            candidate = Path(result.stdout.strip())
+            if candidate.exists():
+                return candidate
+    except FileNotFoundError:
+        pass
+    print_error("Puppet not found. Run 'psa dpk setup' first")
+    print_info(f"Expected at: {dpk_puppet}")
+    raise typer.Exit(1)
+
+
+def _build_facter_env(
+    config: PsaConfig,
+    server_facts: dict,
+    *,
+    env: Optional[str],
+    tier: Optional[str],
+    pillar: Optional[str],
+    zone: Optional[str],
+    role: Optional[str],
+) -> tuple[dict, list]:
+    """Resolve fact precedence (CLI > server.yaml > config default) and
+    build a FACTER_*-populated env dict.
+
+    Only sets FACTER_* when the value comes from a CLI flag or config
+    default; if server.yaml supplies the fact, leaves FACTER_* unset so
+    Facter reads server.yaml directly. Side effect: prints
+    `Reading from server.yaml: ...` and `Setting fact: ...` info lines.
+
+    Returns (facter_env, defaulted_messages).
+    """
+    ops = config.ops
+
+    cli_provided = {
+        "env": env is not None,
+        "ps_tier": tier is not None,
+        "ps_pillar": pillar is not None,
+        "ps_zone": zone is not None,
+        "ps_role": role is not None,
+    }
+
+    defaulted: list = []
+    if not env and "env" not in server_facts and ops.environment_name:
+        env = ops.environment_name
+        defaulted.append(f"env={env}")
+    if not tier and "ps_tier" not in server_facts and ops.tier:
+        tier = ops.tier
+        defaulted.append(f"tier={tier}")
+    if not pillar and "ps_pillar" not in server_facts and ops.pillar:
+        pillar = ops.pillar
+        defaulted.append(f"pillar={pillar}")
+    if not zone and "ps_zone" not in server_facts and ops.zone:
+        zone = ops.zone
+        defaulted.append(f"zone={zone}")
+    if not role and "ps_role" not in server_facts and ops.ps_role:
+        role = ops.ps_role
+        defaulted.append(f"role={role}")
+
+    server_provided = [
+        k for k in ("ps_role", "env", "ps_tier", "ps_zone", "ps_pillar")
+        if k in server_facts
+    ]
+    if server_provided:
+        print_info(f"Reading from server.yaml: {', '.join(server_provided)}")
+
+    facter_env = os.environ.copy()
+
+    def _set(fact: str, value: Optional[str]) -> None:
+        if not value:
+            return
+        if (
+            not cli_provided.get(fact, False)
+            and fact in server_facts
+            and value == server_facts.get(fact)
+        ):
+            return
+        facter_env[f"FACTER_{fact}"] = value
+        print_info(f"Setting fact: {fact}={value}")
+
+    _set("env", env)
+    _set("ps_tier", tier)
+    _set("ps_pillar", pillar)
+    _set("ps_zone", zone)
+    _set("ps_role", role)
+
+    return facter_env, defaulted
+
+
+def _wrap_with_sudo(
+    cmd: list,
+    facter_env: dict,
+    config: PsaConfig,
+) -> tuple[list, dict]:
+    """Auto-sudo a puppet command unless we're already root, running as the
+    configured runtime_user, or sudo is disabled.
+
+    sudo strips env by default; lift FACTER_* into VAR=val args (the form
+    sudo recognizes for the target command) when sudo'ing. Returns
+    (final_cmd, run_env).
+    """
+    user = os.environ.get("USER")
+    needs_sudo = (
+        config.sudo_enabled
+        and os.geteuid() != 0
+        and user != config.runtime_user
+    )
+    if not needs_sudo:
+        return cmd, facter_env
+
+    facter_args = [
+        f"{k}={v}" for k, v in facter_env.items() if k.startswith("FACTER_")
+    ]
+    return ["sudo"] + facter_args + list(cmd), os.environ.copy()
+
+
 def _read_server_facts(config: PsaConfig) -> dict:
     """Read facts from <facts.d>/server.yaml. Empty dict if missing or unreadable.
 
@@ -966,27 +1094,7 @@ def apply(
         print_error(f"Site manifest not found: {site_pp}")
         raise typer.Exit(1)
 
-    # Find puppet binary - check DPK location first, then system
-    puppet_bin = None
-    dpk_base = resolved_path.parent  # e.g., /opt/oracle/psft
-    dpk_puppet = dpk_base / "psft_puppet_agent" / "bin" / "puppet"
-    if dpk_puppet.exists():
-        puppet_bin = dpk_puppet
-    elif Path("/opt/puppetlabs/puppet/bin/puppet").exists():
-        puppet_bin = Path("/opt/puppetlabs/puppet/bin/puppet")
-    else:
-        # Try PATH
-        try:
-            result = subprocess.run(["which", "puppet"], capture_output=True, text=True)
-            if result.returncode == 0:
-                puppet_bin = Path(result.stdout.strip())
-        except FileNotFoundError:
-            pass
-
-    if not puppet_bin or not puppet_bin.exists():
-        print_error("Puppet not found. Run 'psa dpk setup' first")
-        print_info(f"Expected at: {dpk_puppet}")
-        raise typer.Exit(1)
+    puppet_bin = _resolve_puppet_bin(resolved_path)
 
     cmd = [
         str(puppet_bin),
@@ -1009,73 +1117,18 @@ def apply(
 
     # Load config and read server.yaml (Facter external facts).
     config = get_config()
-    ops = config.ops
     server_facts = _read_server_facts(config)
-
-    # Capture which CLI flags were explicitly set before defaults are applied.
-    cli_provided = {
-        "env": env is not None,
-        "ps_tier": tier is not None,
-        "ps_pillar": pillar is not None,
-        "ps_zone": zone is not None,
-        "ps_role": role is not None,
-    }
-
-    # Apply config defaults only when neither CLI flag nor server.yaml supplies the fact.
-    defaulted = []
-    if not env and "env" not in server_facts and ops.environment_name:
-        env = ops.environment_name
-        defaulted.append(f"env={env}")
-    if not tier and "ps_tier" not in server_facts and ops.tier:
-        tier = ops.tier
-        defaulted.append(f"tier={tier}")
-    if not pillar and "ps_pillar" not in server_facts and ops.pillar:
-        pillar = ops.pillar
-        defaulted.append(f"pillar={pillar}")
-    if not zone and "ps_zone" not in server_facts and ops.zone:
-        zone = ops.zone
-        defaulted.append(f"zone={zone}")
-    if not role and "ps_role" not in server_facts and ops.ps_role:
-        role = ops.ps_role
-        defaulted.append(f"role={role}")
-
-    if defaulted and not ops.suppress_fact_warnings:
+    facter_env, defaulted = _build_facter_env(
+        config, server_facts,
+        env=env, tier=tier, pillar=pillar, zone=zone, role=role,
+    )
+    if defaulted and not config.ops.suppress_fact_warnings:
         print_warning(f"Using config defaults: {', '.join(defaulted)}")
-
-    # Inform user which facts will come from server.yaml (Facter reads them directly).
-    server_provided = [k for k in ("ps_role", "env", "ps_tier", "ps_zone", "ps_pillar") if k in server_facts]
-    if server_provided:
-        print_info(f"Reading from server.yaml: {', '.join(server_provided)}")
-
-    # Build Facter environment variables.
-    # Only set FACTER_* for CLI overrides or config-default fallbacks. When the
-    # fact is supplied by server.yaml and no override is given, leave FACTER_*
-    # unset so Facter reads server.yaml directly.
-    facter_env = os.environ.copy()
-
-    def _set_facter(fact: str, value: Optional[str]) -> None:
-        if not value:
-            return
-        # Skip if the value will come from server.yaml (no CLI flag, no config default).
-        if (
-            not cli_provided.get(fact, False)
-            and fact in server_facts
-            and value == server_facts.get(fact)
-        ):
-            return
-        facter_env[f"FACTER_{fact}"] = value
-        print_info(f"Setting fact: {fact}={value}")
-
-    _set_facter("env", env)
-    _set_facter("ps_tier", tier)
-    _set_facter("ps_pillar", pillar)
-    _set_facter("ps_zone", zone)
-    _set_facter("ps_role", role)
 
     # Role -> class announcement. The "0.03s catalog compile" silent-failure
     # case usually reduces to: ps_role didn't match any case in site.pp, so
     # nothing was included.
-    effective_role = role or server_facts.get("ps_role")
+    effective_role = role or server_facts.get("ps_role") or config.ops.ps_role
     if effective_role:
         cls = ROLE_CLASS_MAP.get(effective_role)
         if cls:
@@ -1091,25 +1144,7 @@ def apply(
             "Catalog will be empty."
         )
 
-    # Puppet apply needs root: write to /etc, /var, manage services, etc.
-    # Auto-sudo unless we're already root or running as the configured runtime
-    # user (assumed to have the equivalent privileges) or sudo is disabled.
-    user = os.environ.get("USER")
-    needs_sudo = (
-        config.sudo_enabled
-        and os.geteuid() != 0
-        and user != config.runtime_user
-    )
-    if needs_sudo:
-        # sudo strips env by default; pass FACTER_* via the VAR=val arg form
-        # which sudo recognizes for the target command.
-        facter_args = [
-            f"{k}={v}" for k, v in facter_env.items() if k.startswith("FACTER_")
-        ]
-        cmd = ["sudo"] + facter_args + cmd
-        run_env = os.environ.copy()
-    else:
-        run_env = facter_env
+    cmd, run_env = _wrap_with_sudo(cmd, facter_env, config)
 
     print_info(f"Running: {' '.join(cmd)}")
 
@@ -1161,6 +1196,101 @@ def apply(
     else:
         print_error(f"Puppet apply failed (exit {rc})")
         raise typer.Exit(rc if rc > 0 else 1)
+
+
+@app.command("lookup")
+def lookup(
+    key: str = typer.Argument(..., help="Hiera key to look up (e.g. oracle_client_version)"),
+    render_as: str = typer.Option(
+        "yaml",
+        "--render-as",
+        help="Output format: yaml | json | s",
+    ),
+    explain: bool = typer.Option(
+        False,
+        "--explain",
+        help="Show the hierarchy walk and which level (if any) matched",
+    ),
+    role: Optional[str] = typer.Option(
+        None, "--role", "-r",
+        help="Set ps_role fact (app, web, prcs, mid, webapp)",
+    ),
+    env: Optional[str] = typer.Option(
+        None, "--env", "-e",
+        help="Set env fact for Hiera lookup (e.g., FSCMDEV)",
+    ),
+    tier: Optional[str] = typer.Option(
+        None, "--tier", "-t",
+        help="Set ps_tier fact for Hiera lookup",
+    ),
+    pillar: Optional[str] = typer.Option(
+        None, "--pillar", "-p",
+        help="Set ps_pillar fact for Hiera lookup",
+    ),
+    zone: Optional[str] = typer.Option(
+        None, "--zone", "-z",
+        help="Set ps_zone fact for Hiera lookup",
+    ),
+    dpk_home: Optional[Path] = typer.Option(
+        None, "--dpk-home",
+        help=f"DPK install dir (or ${ENV_DPK_HOME}, or config.dpk_base/dpk; default {DEFAULT_DPK_HOME})",
+    ),
+) -> None:
+    """
+    Look up a Hiera key using the same facts apply would use.
+
+    Wraps `puppet lookup`. Useful for debugging "why does apply think X is
+    Y?" or "where should I define this missing key?"
+
+    Examples:
+        psa dpk lookup oracle_client_version --env FSCMDEV --role mid
+        psa dpk lookup pia_psserver_list --explain
+        psa dpk lookup db_settings --render-as json
+    """
+    resolved_path = _resolve_dpk_home(dpk_home)
+    puppet_dir = resolved_path / "puppet"
+    if not puppet_dir.exists():
+        print_error(f"DPK puppet directory not found: {puppet_dir}")
+        print_info("Run 'psa dpk setup' first")
+        raise typer.Exit(1)
+
+    puppet_bin = _resolve_puppet_bin(resolved_path)
+
+    config = get_config()
+    server_facts = _read_server_facts(config)
+    facter_env, defaulted = _build_facter_env(
+        config, server_facts,
+        env=env, tier=tier, pillar=pillar, zone=zone, role=role,
+    )
+    if defaulted and not config.ops.suppress_fact_warnings:
+        print_warning(f"Using config defaults: {', '.join(defaulted)}")
+
+    cmd = [
+        str(puppet_bin), "lookup", key,
+        "--confdir", str(puppet_dir),
+        "--environment", "production",
+        "--render-as", render_as,
+    ]
+    if explain:
+        cmd.append("--explain")
+
+    cmd, run_env = _wrap_with_sudo(cmd, facter_env, config)
+    print_info(f"Running: {' '.join(cmd)}")
+
+    try:
+        rc, _, _ = stream_subprocess(
+            cmd, cwd=puppet_dir, env=run_env, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        print_error("Puppet lookup timed out (>2 min)")
+        raise typer.Exit(1)
+    except FileNotFoundError:
+        print_error("Puppet not found. Run 'psa dpk setup' first")
+        raise typer.Exit(1)
+
+    # puppet lookup exits non-zero when the key is undefined; pass through.
+    if rc != 0:
+        raise typer.Exit(rc)
 
 
 # Lines starting with these prefixes are puppet's chatty output. By default
