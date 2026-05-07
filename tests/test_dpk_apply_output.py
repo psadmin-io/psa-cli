@@ -71,11 +71,13 @@ def test_exit_2_real_apply_reports_changes_applied(fake_dpk):
 
 
 def test_exit_4_resource_failure_exits_nonzero(fake_dpk):
+    # stderr empty -> exit-code mapping path is exercised. Stderr-with-Error
+    # case is covered separately under "Stderr error pattern scan" below.
     result = _run(
         fake_dpk,
         rc=4,
         stdout="Notice: Compiled catalog in 1.2 seconds\n",
-        stderr="Error: /Stage[main]/...: change from absent to present failed\n",
+        stderr="",
     )
     assert result.exit_code == 1
     assert "resource failures" in result.output
@@ -88,14 +90,9 @@ def test_exit_6_changes_plus_failures_exits_nonzero(fake_dpk):
 
 
 def test_exit_1_catalog_error_exits_nonzero(fake_dpk):
-    result = _run(
-        fake_dpk,
-        rc=1,
-        stderr=(
-            "Error: Function lookup() did not find a value "
-            "for the name 'oracle_client_version'\n"
-        ),
-    )
+    # exit 1 with empty stderr -> exit-code mapping path. The realistic case
+    # (exit 1 plus stderr Error:) is covered by the stderr-scan tests below.
+    result = _run(fake_dpk, rc=1, stderr="")
     assert result.exit_code == 1
     assert "catalog compilation" in result.output
 
@@ -218,6 +215,74 @@ def test_verbose_disables_stdout_filter(fake_dpk):
 
     assert result.exit_code == 0
     assert captured["filter"] is None
+
+
+# --- Stderr error pattern scan (overrides apparent success) ---
+
+
+def test_stderr_error_with_rc_zero_exits_nonzero(fake_dpk):
+    """Puppet --noop with --detailed-exitcodes can exit 0 even with catalog
+    errors on stderr. The CLI must scan stderr and treat as failure."""
+    result = _run(
+        fake_dpk,
+        rc=0,
+        stdout="Notice: Compiled catalog in 0.03 seconds\n",
+        stderr=(
+            "Warning: Unknown variable: 'env_dpkprereq'\n"
+            "Error: Function lookup() did not find a value for the name "
+            "'oracle_client_version'\n"
+        ),
+    )
+    assert result.exit_code == 1
+    assert "1 error(s) detected on stderr" in result.output
+
+
+def test_stderr_lookup_pattern_with_rc_two_exits_nonzero(fake_dpk):
+    """Even rc=2 (changes-applied success) is overridden by stderr errors."""
+    result = _run(
+        fake_dpk,
+        rc=2,
+        stdout="Notice: Compiled catalog in 1.0 seconds\n",
+        stderr=(
+            "Function lookup() did not find a value for the name 'foo'\n"
+        ),
+    )
+    assert result.exit_code == 1
+    assert "detected on stderr" in result.output
+
+
+def test_stderr_warning_only_does_not_fail(fake_dpk):
+    """Warning lines on stderr do not match fatal patterns; success stands."""
+    result = _run(
+        fake_dpk,
+        rc=0,
+        stdout="Notice: Compiled catalog in 1.0 seconds\n",
+        stderr="Warning: Unknown variable: 'something_optional'\n",
+    )
+    assert result.exit_code == 0
+    assert "no changes needed" in result.output
+    assert "detected on stderr" not in result.output
+
+
+def test_stderr_could_not_find_class_fails(fake_dpk):
+    result = _run(
+        fake_dpk,
+        rc=0,
+        stdout="Notice: Compiled catalog in 0.04 seconds\n",
+        stderr="Could not find class io_role::io_tools_midtier\n",
+    )
+    assert result.exit_code == 1
+    assert "detected on stderr" in result.output
+
+
+def test_stderr_evaluation_error_fails(fake_dpk):
+    result = _run(
+        fake_dpk,
+        rc=2,
+        stdout="Notice: Compiled catalog in 1.2 seconds\n",
+        stderr="Evaluation Error: Operator '[]' is not applicable to undef\n",
+    )
+    assert result.exit_code == 1
 
 
 def test_default_filter_drops_info_and_debug(fake_dpk):

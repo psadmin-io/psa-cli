@@ -37,6 +37,17 @@ def test_stream_subprocess_timeout_kills_process():
         stream_subprocess(["sh", "-c", "sleep 5"], timeout=0.2)
 
 
+def test_stream_subprocess_writes_stderr_to_real_stderr(capfd):
+    """Stderr lines must reach sys.stderr verbatim — Rich-free path so that
+    multithreaded pumping doesn't lose lines (the bug from psadmin.conf Lab 2)."""
+    rc, _, _ = stream_subprocess(
+        ["sh", "-c", "echo 'Error: something failed' 1>&2; exit 0"]
+    )
+    captured = capfd.readouterr()
+    assert rc == 0
+    assert "Error: something failed" in captured.err
+
+
 def test_print_stderr_on_failure_prints_when_failed(capsys):
     result = SimpleNamespace(returncode=1, stderr="Error: boom\nmore detail\n")
     print_stderr_on_failure(result)

@@ -1095,7 +1095,7 @@ def apply(
 
     stdout_filter = None if verbose else _puppet_default_filter
     try:
-        rc, stdout_text, _stderr_text = stream_subprocess(
+        rc, stdout_text, stderr_text = stream_subprocess(
             cmd,
             cwd=puppet_dir,
             env=facter_env,
@@ -1110,6 +1110,18 @@ def apply(
         raise typer.Exit(1)
 
     _emit_catalog_diagnostics(stdout_text, rc, dry_run)
+
+    # Stderr-error scan trumps exit code. Puppet --noop with --detailed-exitcodes
+    # has been observed to exit 0 even when catalog compilation hits errors
+    # like missing Hiera keys; the error appears on stderr but the resource-state
+    # exit code says "no changes". Search for known fatal patterns and override.
+    stderr_errors = _scan_puppet_errors(stderr_text)
+    if stderr_errors:
+        print_error(
+            f"Puppet apply failed: {len(stderr_errors)} error(s) detected on stderr "
+            f"(exit {rc} ignored)"
+        )
+        raise typer.Exit(1)
 
     if rc == 0:
         print_success("Puppet apply: no changes needed")
@@ -1142,6 +1154,28 @@ def _puppet_default_filter(line: str) -> bool:
 
 _CATALOG_COMPILE_RE = re.compile(r"Compiled catalog .* in ([\d.]+) seconds")
 _NOTICE_CHANGE_RE = re.compile(r"^Notice: /Stage\[", re.MULTILINE)
+
+# Patterns whose presence on stderr means the run failed, regardless of the
+# exit code puppet reported. See https://puppet.com/docs/puppet/latest/man/apply.html
+# - puppet --noop with --detailed-exitcodes can exit 0 while emitting these.
+_PUPPET_FATAL_STDERR_RES = [
+    re.compile(r"^Error:", re.MULTILINE),
+    re.compile(r"Function lookup\(\) did not find"),
+    re.compile(r"Could not find class"),
+    re.compile(r"Could not parse"),
+    re.compile(r"Evaluation Error"),
+]
+
+
+def _scan_puppet_errors(stderr_text: str) -> list[str]:
+    """Return stderr lines matching any fatal puppet error pattern."""
+    if not stderr_text:
+        return []
+    matches: list[str] = []
+    for line in stderr_text.splitlines():
+        if any(p.search(line) for p in _PUPPET_FATAL_STDERR_RES):
+            matches.append(line)
+    return matches
 
 
 def _emit_catalog_diagnostics(stdout_text: str, rc: int, dry_run: bool) -> None:

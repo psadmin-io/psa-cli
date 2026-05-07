@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from threading import Thread
 from typing import Callable, Mapping, Optional, Tuple
 
-from psa.core.output import console, error_console, print_error
+from psa.core.output import print_error
 
 
 def stream_subprocess(
@@ -20,9 +21,12 @@ def stream_subprocess(
 ) -> Tuple[int, str, str]:
     """Run ``cmd``, streaming output line-by-line while also capturing it.
 
-    - stderr lines are always printed to stderr and captured.
-    - stdout lines are captured; printed only when ``stdout_filter`` is None
-      or returns True for the line.
+    - stderr lines are always written verbatim to ``sys.stderr`` and captured.
+    - stdout lines are captured; written verbatim to ``sys.stdout`` when
+      ``stdout_filter`` is None or returns True for the line.
+
+    Writes go directly to ``sys.stdout``/``sys.stderr`` (not Rich) so output
+    is byte-faithful and reliably flushed under multithreaded pumping.
 
     Returns ``(returncode, full_stdout, full_stderr)``. Raises
     ``subprocess.TimeoutExpired`` after killing the process on timeout.
@@ -45,13 +49,15 @@ def stream_subprocess(
         for line in proc.stdout:
             stdout_buf.append(line)
             if stdout_filter is None or stdout_filter(line):
-                console.out(line, end="", highlight=False)
+                sys.stdout.write(line)
+                sys.stdout.flush()
 
     def pump_stderr() -> None:
         assert proc.stderr is not None
         for line in proc.stderr:
             stderr_buf.append(line)
-            error_console.out(line, end="", highlight=False)
+            sys.stderr.write(line)
+            sys.stderr.flush()
 
     t_out = Thread(target=pump_stdout, daemon=True)
     t_err = Thread(target=pump_stderr, daemon=True)
