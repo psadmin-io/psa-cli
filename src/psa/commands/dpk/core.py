@@ -1091,6 +1091,26 @@ def apply(
             "Catalog will be empty."
         )
 
+    # Puppet apply needs root: write to /etc, /var, manage services, etc.
+    # Auto-sudo unless we're already root or running as the configured runtime
+    # user (assumed to have the equivalent privileges) or sudo is disabled.
+    user = os.environ.get("USER")
+    needs_sudo = (
+        config.sudo_enabled
+        and os.geteuid() != 0
+        and user != config.runtime_user
+    )
+    if needs_sudo:
+        # sudo strips env by default; pass FACTER_* via the VAR=val arg form
+        # which sudo recognizes for the target command.
+        facter_args = [
+            f"{k}={v}" for k, v in facter_env.items() if k.startswith("FACTER_")
+        ]
+        cmd = ["sudo"] + facter_args + cmd
+        run_env = os.environ.copy()
+    else:
+        run_env = facter_env
+
     print_info(f"Running: {' '.join(cmd)}")
 
     stdout_filter = None if verbose else _puppet_default_filter
@@ -1098,7 +1118,7 @@ def apply(
         rc, stdout_text, stderr_text = stream_subprocess(
             cmd,
             cwd=puppet_dir,
-            env=facter_env,
+            env=run_env,
             timeout=3600,
             stdout_filter=stdout_filter,
         )

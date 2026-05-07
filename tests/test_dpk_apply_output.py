@@ -196,6 +196,85 @@ def test_detailed_exitcodes_always_passed(fake_dpk):
     assert "--detailed-exitcodes" in captured["cmd"]
 
 
+# --- Auto-sudo for puppet ---
+
+
+def test_sudo_prepended_when_not_root_or_runtime_user(fake_dpk, monkeypatch):
+    """Non-root, non-runtime-user invocation prepends sudo and lifts FACTER_*
+    into VAR=val args (sudo strips env by default)."""
+    monkeypatch.setenv("USER", "opc")
+    monkeypatch.setattr("os.geteuid", lambda: 1000)
+
+    captured = {}
+
+    def fake_stream(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env") or {}
+        return 0, "", ""
+
+    dpk, facts_d = fake_dpk
+    config = PsaConfig(ops=OpsConfig(), runtime_user="psadm2", sudo_enabled=True)
+    with patch("psa.commands.dpk.core.get_config", return_value=config), \
+         patch("psa.commands.dpk.core.stream_subprocess", side_effect=fake_stream), \
+         patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
+        result = runner.invoke(
+            dpk_app, ["apply", "--dpk-home", str(dpk), "--role", "mid"]
+        )
+
+    assert result.exit_code == 0
+    assert captured["cmd"][0] == "sudo"
+    assert "FACTER_ps_role=mid" in captured["cmd"]
+    # env should not carry FACTER_* (they live in the cmd args now)
+    assert not any(k.startswith("FACTER_") for k in captured["env"])
+
+
+def test_no_sudo_when_running_as_runtime_user(fake_dpk, monkeypatch):
+    monkeypatch.setenv("USER", "psadm2")
+    monkeypatch.setattr("os.geteuid", lambda: 1000)
+
+    captured = {}
+
+    def fake_stream(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env") or {}
+        return 0, "", ""
+
+    dpk, facts_d = fake_dpk
+    config = PsaConfig(ops=OpsConfig(), runtime_user="psadm2", sudo_enabled=True)
+    with patch("psa.commands.dpk.core.get_config", return_value=config), \
+         patch("psa.commands.dpk.core.stream_subprocess", side_effect=fake_stream), \
+         patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
+        result = runner.invoke(
+            dpk_app, ["apply", "--dpk-home", str(dpk), "--role", "mid"]
+        )
+
+    assert result.exit_code == 0
+    assert captured["cmd"][0] != "sudo"
+    # FACTER_* should be in env, not cmd
+    assert captured["env"].get("FACTER_ps_role") == "mid"
+
+
+def test_no_sudo_when_already_root(fake_dpk, monkeypatch):
+    monkeypatch.setenv("USER", "root")
+    monkeypatch.setattr("os.geteuid", lambda: 0)
+
+    captured = {}
+
+    def fake_stream(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return 0, "", ""
+
+    dpk, facts_d = fake_dpk
+    config = PsaConfig(ops=OpsConfig(), sudo_enabled=True)
+    with patch("psa.commands.dpk.core.get_config", return_value=config), \
+         patch("psa.commands.dpk.core.stream_subprocess", side_effect=fake_stream), \
+         patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
+        result = runner.invoke(dpk_app, ["apply", "--dpk-home", str(dpk)])
+
+    assert result.exit_code == 0
+    assert captured["cmd"][0] != "sudo"
+
+
 def test_verbose_disables_stdout_filter(fake_dpk):
     """With --verbose, stream_subprocess gets stdout_filter=None."""
     captured = {}
