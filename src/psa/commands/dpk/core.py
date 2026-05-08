@@ -91,7 +91,6 @@ def _generate_hiera_yaml(
         "",
         "defaults:",
         "  datadir: data",
-        "  data_hash: yaml_data",
         "  lookup_key: eyaml_lookup_key",
         "  options:",
         f"    pkcs7_private_key: {private_key}",
