@@ -1178,12 +1178,19 @@ def apply(
     else:
         summary_active = summary
 
+    # Puppet emits Warning/Notice/Error to stderr; filter both streams in
+    # summary mode (shared counters) so suppression is symmetric. Default
+    # mode keeps current behavior: filter stdout only, stderr verbatim.
     if verbose:
         stdout_filter = None
+        stderr_filter = None
     elif summary_active:
-        stdout_filter = lambda line: _puppet_summary_filter(line, summary_counters)
+        summary_filter = lambda line: _puppet_summary_filter(line, summary_counters)
+        stdout_filter = summary_filter
+        stderr_filter = summary_filter
     else:
         stdout_filter = _puppet_default_filter
+        stderr_filter = None
 
     try:
         rc, stdout_text, stderr_text = stream_subprocess(
@@ -1192,6 +1199,7 @@ def apply(
             env=run_env,
             timeout=3600,
             stdout_filter=stdout_filter,
+            stderr_filter=stderr_filter,
         )
     except subprocess.TimeoutExpired:
         print_error("Puppet apply timed out (>1 hour)")

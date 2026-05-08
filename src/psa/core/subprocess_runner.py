@@ -18,12 +18,16 @@ def stream_subprocess(
     env: Optional[Mapping[str, str]] = None,
     timeout: Optional[float] = None,
     stdout_filter: Optional[Callable[[str], bool]] = None,
+    stderr_filter: Optional[Callable[[str], bool]] = None,
 ) -> Tuple[int, str, str]:
     """Run ``cmd``, streaming output line-by-line while also capturing it.
 
-    - stderr lines are always written verbatim to ``sys.stderr`` and captured.
     - stdout lines are captured; written verbatim to ``sys.stdout`` when
       ``stdout_filter`` is None or returns True for the line.
+    - stderr lines are captured; written verbatim to ``sys.stderr`` when
+      ``stderr_filter`` is None or returns True for the line. The full
+      stderr is always captured in the return value regardless of filter,
+      so callers can scan it for fatal patterns.
 
     Writes go directly to ``sys.stdout``/``sys.stderr`` (not Rich) so output
     is byte-faithful and reliably flushed under multithreaded pumping.
@@ -56,8 +60,9 @@ def stream_subprocess(
         assert proc.stderr is not None
         for line in proc.stderr:
             stderr_buf.append(line)
-            sys.stderr.write(line)
-            sys.stderr.flush()
+            if stderr_filter is None or stderr_filter(line):
+                sys.stderr.write(line)
+                sys.stderr.flush()
 
     t_out = Thread(target=pump_stdout, daemon=True)
     t_err = Thread(target=pump_stderr, daemon=True)

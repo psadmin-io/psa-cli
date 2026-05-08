@@ -32,6 +32,22 @@ def test_stream_subprocess_filter_drops_lines(capsys):
     assert "Info: drop" not in captured.out
 
 
+def test_stream_subprocess_stderr_filter_drops_lines(capfd):
+    """stderr_filter mirrors stdout_filter: dropped lines are still captured."""
+    rc, out, err = stream_subprocess(
+        ["sh", "-c", "echo Warning: noisy 1>&2; echo Error: keep 1>&2"],
+        stderr_filter=lambda line: not line.startswith("Warning:"),
+    )
+    captured = capfd.readouterr()
+    assert rc == 0
+    # Both captured for downstream scanning
+    assert "Warning: noisy" in err
+    assert "Error: keep" in err
+    # Only the kept line reached real stderr
+    assert "Error: keep" in captured.err
+    assert "Warning: noisy" not in captured.err
+
+
 def test_stream_subprocess_timeout_kills_process():
     with pytest.raises(subprocess.TimeoutExpired):
         stream_subprocess(["sh", "-c", "sleep 5"], timeout=0.2)

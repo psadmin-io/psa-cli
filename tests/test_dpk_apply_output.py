@@ -554,6 +554,70 @@ def test_verbose_overrides_summary(fake_dpk):
     assert "ignored" in result.output
 
 
+def test_summary_filters_stderr_too(fake_dpk):
+    """Puppet emits Warning/Notice on stderr; --summary must filter stderr too."""
+    captured = {}
+
+    def fake_stream(cmd, **kwargs):
+        captured["stdout_filter"] = kwargs.get("stdout_filter")
+        captured["stderr_filter"] = kwargs.get("stderr_filter")
+        return 0, "", ""
+
+    dpk, facts_d = fake_dpk
+    with patch(
+        "psa.commands.dpk.core.get_config",
+        return_value=PsaConfig(ops=OpsConfig(), sudo_enabled=False),
+    ), patch(
+        "psa.commands.dpk.core.stream_subprocess", side_effect=fake_stream
+    ), patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
+        result = runner.invoke(dpk_app, ["apply", "--dpk-home", str(dpk), "--summary"])
+
+    assert result.exit_code == 0
+    assert captured["stdout_filter"] is not None
+    assert captured["stderr_filter"] is not None
+    # Same callable -> shared counters across both streams.
+    assert captured["stdout_filter"] is captured["stderr_filter"]
+
+
+def test_default_mode_does_not_filter_stderr(fake_dpk):
+    """Default mode keeps stderr verbatim (current behavior)."""
+    captured = {}
+
+    def fake_stream(cmd, **kwargs):
+        captured["stderr_filter"] = kwargs.get("stderr_filter")
+        return 0, "", ""
+
+    dpk, facts_d = fake_dpk
+    with patch(
+        "psa.commands.dpk.core.get_config",
+        return_value=PsaConfig(ops=OpsConfig(), sudo_enabled=False),
+    ), patch(
+        "psa.commands.dpk.core.stream_subprocess", side_effect=fake_stream
+    ), patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
+        runner.invoke(dpk_app, ["apply", "--dpk-home", str(dpk)])
+
+    assert captured["stderr_filter"] is None
+
+
+def test_verbose_mode_does_not_filter_stderr(fake_dpk):
+    captured = {}
+
+    def fake_stream(cmd, **kwargs):
+        captured["stderr_filter"] = kwargs.get("stderr_filter")
+        return 0, "", ""
+
+    dpk, facts_d = fake_dpk
+    with patch(
+        "psa.commands.dpk.core.get_config",
+        return_value=PsaConfig(ops=OpsConfig(), sudo_enabled=False),
+    ), patch(
+        "psa.commands.dpk.core.stream_subprocess", side_effect=fake_stream
+    ), patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
+        runner.invoke(dpk_app, ["apply", "--dpk-home", str(dpk), "--verbose"])
+
+    assert captured["stderr_filter"] is None
+
+
 def test_summary_does_not_break_stderr_error_scan(fake_dpk):
     """--summary mode must still escalate fatal stderr errors."""
     result = _run(
