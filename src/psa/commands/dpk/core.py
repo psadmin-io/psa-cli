@@ -69,13 +69,22 @@ def _generate_hiera_yaml(
     dpk_cust_home: Optional[Path],
     psa_kit_path: Optional[Path],
     enable_psa_kit: bool = False,
+    dpk_home: Optional[Path] = None,
 ) -> str:
     """Generate hiera.yaml hierarchy: DPK_CUST_HOME -> [KIT] -> DPK base.
 
     Customer and kit layers use absolute datadir paths so Puppet reads from
     those locations. DPK layers use relative paths (the default data dir).
     Kit layer is only emitted when enable_psa_kit=True.
+
+    The defaults block enables the eyaml backend so encrypted DPK values
+    (gateway/profile/admin passwords) decrypt at lookup time. Key paths
+    resolve to <dpk_home>/puppet/secure/keys/, the conventional DPK location.
     """
+    keys_base = (dpk_home or Path(DEFAULT_DPK_HOME)) / "puppet" / "secure" / "keys"
+    private_key = keys_base / "private_key.pkcs7.pem"
+    public_key = keys_base / "public_key.pkcs7.pem"
+
     lines = [
         "---",
         "version: 5",
@@ -83,6 +92,10 @@ def _generate_hiera_yaml(
         "defaults:",
         "  datadir: data",
         "  data_hash: yaml_data",
+        "  lookup_key: eyaml_lookup_key",
+        "  options:",
+        f"    pkcs7_private_key: {private_key}",
+        f"    pkcs7_public_key:  {public_key}",
         "",
         "hierarchy:",
     ]
@@ -128,10 +141,12 @@ def _generate_hiera_yaml(
         ]
 
     # --- DPK base layers (relative, uses default datadir) ---
+    # Order: defaults (most overridable) -> customizations -> unix -> deployment
+    # -> configuration (broad runtime values) -> patches (deepest fallback).
     lines += [
         '  # Delivered DPK YAML files (Oracle defaults)',
-        '  - name: "DPK configuration"',
-        '    path: "psft_configuration.yaml"',
+        '  - name: "DPK defaults"',
+        '    path: "defaults.yaml"',
         "",
         '  - name: "DPK customizations"',
         '    path: "psft_customizations.yaml"',
@@ -142,11 +157,11 @@ def _generate_hiera_yaml(
         '  - name: "DPK deployment"',
         '    path: "psft_deployment.yaml"',
         "",
+        '  - name: "DPK configuration"',
+        '    path: "psft_configuration.yaml"',
+        "",
         '  - name: "DPK patches"',
         '    path: "psft_patches.yaml"',
-        "",
-        '  - name: "DPK defaults"',
-        '    path: "defaults.yaml"',
     ]
 
     return "\n".join(lines) + "\n"
@@ -1583,7 +1598,9 @@ def _deploy_hiera_files(
     if fileops is None:
         fileops = _default_fileops()
 
-    hiera_content = _generate_hiera_yaml(dpk_cust_home, psa_kit_path, enable_psa_kit)
+    hiera_content = _generate_hiera_yaml(
+        dpk_cust_home, psa_kit_path, enable_psa_kit, dpk_home=dpk_path,
+    )
 
     targets = [
         puppet_dir / "hiera.yaml",

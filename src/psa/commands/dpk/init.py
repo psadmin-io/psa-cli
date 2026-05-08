@@ -190,7 +190,8 @@ def dpk_init(
     # Generate hiera.yaml (kit layer omitted since enable_psa_kit defaults to False)
     hiera_path = target / "hiera.yaml"
     hiera_content = _generate_hiera_yaml(
-        target, None, enable_psa_kit=config.enable_psa_kit
+        target, None, enable_psa_kit=config.enable_psa_kit,
+        dpk_home=resolved_dpk_home,
     )
     if dry_run:
         console.print(f"  [dim]Would write: {hiera_path}[/dim]")
