@@ -1418,14 +1418,18 @@ _SUMMARY_DROP_ECHO_RES = [
 ]
 
 
+_PUPPET_LINE_PREFIXES = ("Notice:", "Warning:", "Error:", "Info:", "Debug:")
+
+
 def _puppet_summary_filter(line: str, counters: dict) -> bool:
     """Wrap _puppet_default_filter; aggressive Notice/Warning suppression.
 
     Errors and Tuxedo error context are never dropped. Notice lines are kept
     only if they match the allow-list (DPK milestones, top-level applies,
-    catalog status, failure context). Notify-message echoes and blank lines
-    are deduplicated silently. Hidden warnings/notices increment counters
-    for the end-of-run summary.
+    catalog status, failure context). Notify-message echoes, blank lines,
+    and continuation lines of dropped Notices/Warnings (multi-line value
+    dumps like webserver_settings) are dropped silently. Hidden
+    warnings/notices increment counters for the end-of-run summary.
     """
     if not _puppet_default_filter(line):
         return False
@@ -1436,13 +1440,28 @@ def _puppet_summary_filter(line: str, counters: dict) -> bool:
     if not stripped.strip():
         return False
 
-    # Echo dedup: silent drop, no counter.
+    has_prefix = any(stripped.startswith(p) for p in _PUPPET_LINE_PREFIXES)
+
+    # Continuation line (no Puppet prefix). Drop if we're suppressing the
+    # rest of a previously-dropped multi-line Notice/Warning. Otherwise keep
+    # — these are Tuxedo error context lines, multi-line milestone content
+    # (e.g. the line after a bare `Notice:`), etc.
+    if not has_prefix:
+        return not counters.get("_suppressing", False)
+
+    # New prefixed line: cancel any in-progress continuation suppression.
+    counters["_suppressing"] = False
+
+    # Echo dedup: silent drop. Set suppression in case a multi-line echo
+    # has continuation lines.
     if any(p.search(stripped) for p in _SUMMARY_DROP_ECHO_RES):
+        counters["_suppressing"] = True
         return False
 
     if stripped.startswith("Warning:"):
         if any(p.search(stripped) for p in _SUMMARY_DROP_WARNING_RES):
             counters["warnings"] = counters.get("warnings", 0) + 1
+            counters["_suppressing"] = True
             return False
         return True
 
@@ -1450,6 +1469,10 @@ def _puppet_summary_filter(line: str, counters: dict) -> bool:
         if any(p.search(stripped) for p in _SUMMARY_KEEP_NOTICE_RES):
             return True
         counters["notices"] = counters.get("notices", 0) + 1
+        # Bare `Notice:` (multi-line milestone opener like `Notice:\n<DPKUSERS>...`)
+        # has its content on the next line — don't suppress that continuation.
+        if stripped.rstrip() != "Notice:":
+            counters["_suppressing"] = True
         return False
 
     return True

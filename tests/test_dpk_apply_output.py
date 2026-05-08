@@ -460,6 +460,42 @@ def test_summary_drops_blank_lines(fake_dpk):
     assert f("    \n") is False
 
 
+def test_summary_drops_continuation_after_dropped_notice(fake_dpk):
+    """Multi-line value dumps after a dropped Notice (e.g. webserver_settings)
+    are also dropped via continuation suppression."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    # Dropped content-bearing Notice opens a multi-line value.
+    assert f(
+        "Notice: /Stage[main]/Pt_profile::Pt_pia/Pt_webserver_domain[fscmdv1]"
+        "/webserver_settings: defined 'webserver_settings' as [\n"
+    ) is False
+    # Continuation lines from the value: dropped.
+    assert f("  ['webserver_type=weblogic'],\n") is False
+    assert f("  ['webserver_https_port=8443']]\n") is False
+    # Next prefix-starting line clears suppression.
+    assert f("Notice: <DPKPIADOM> The PIA domain is complete.\n") is True
+
+
+def test_summary_keeps_multiline_milestone_content(fake_dpk):
+    """A bare `Notice:` line (multi-line milestone) drops its prefix, but the
+    content line on the next line still passes through."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    # Bare `Notice:` dropped but no continuation suppression set.
+    assert f("Notice:\n") is False
+    # Content line: kept (no prefix, no suppression).
+    assert f("<DPKUSERS> The DPK-installed users and groups are present.\n") is True
+
+
+def test_summary_keeps_error_continuation_context(fake_dpk):
+    """Multi-line context after an Error (Tuxedo block etc.) is kept."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    assert f("Error: Unable to perform action start: returned 255\n") is True
+    # Tuxedo context lines (no Puppet prefix): kept.
+    assert f("tmadmin - Copyright (c) 1996-2025 Oracle.\n") is True
+    assert f("> INFO: Oracle Tuxedo, Version 22.1.0.0.0, 64-bit\n") is True
+    assert f("==============ERROR!================\n") is True
+
+
 def test_summary_drops_notify_echo_single_line(fake_dpk):
     """The redundant `Notify[...]/message: defined 'message' as ...` echo is dropped."""
     f, _ = _capture_summary_filter(fake_dpk)
