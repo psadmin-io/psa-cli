@@ -164,7 +164,7 @@ def dpk_init(
 
     Examples:
         psa dpk init
-        psa dpk init --dpk-cust-home /u01/app/io/dpk-cust --dpk-home /u01/app/psoft/dpk
+        psa dpk init --dpk-cust-home /u01/app/psa/dpk --dpk-home /u01/app/psoft/dpk
         psa dpk init --dry-run
     """
     config_was_missing = not CONFIG_PATH.exists()

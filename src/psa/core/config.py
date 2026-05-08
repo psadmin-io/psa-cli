@@ -11,9 +11,8 @@ import yaml
 
 # Default paths for PeopleSoft installations
 DEFAULT_PS_BASE = "/u01/app/psoft"
-DEFAULT_IO_BASE = "/u01/app/io"
-DEFAULT_PSA_KIT = "/u01/app/io/psa-kit"
-DEFAULT_DPK_CUST_HOME = "/u01/app/io/dpk-cust"
+DEFAULT_PSA_KIT = "/u01/app/psa/psa-kit"
+DEFAULT_DPK_CUST_HOME = "/u01/app/psa/dpk"
 
 # Config file location
 CONFIG_PATH = Path.home() / ".config" / "psa" / "config.yaml"
@@ -46,7 +45,6 @@ class PsaConfig:
     """Configuration for psa tools."""
 
     ps_base: Path = field(default_factory=lambda: Path(DEFAULT_PS_BASE))
-    io_base: Path = field(default_factory=lambda: Path(DEFAULT_IO_BASE))
     psa_kit_path: Optional[Path] = None
     dpk_base: Optional[Path] = None  # DPK install parent dir; dpk_home is dpk_base/dpk
     dpk_cust_home: Optional[Path] = None
@@ -85,9 +83,6 @@ class PsaConfig:
         if ps_base := os.environ.get("PS_BASE"):
             config.ps_base = Path(ps_base)
 
-        if io_base := os.environ.get("IO_BASE"):
-            config.io_base = Path(io_base)
-
         if psa_kit := os.environ.get("PSA_KIT"):
             config.psa_kit_path = Path(psa_kit)
 
@@ -123,8 +118,6 @@ class PsaConfig:
                 # PS paths
                 if ps_base := data.get("ps_base"):
                     config.ps_base = Path(ps_base)
-                if io_base := data.get("io_base"):
-                    config.io_base = Path(io_base)
                 if ps_cfg_home := data.get("ps_cfg_home"):
                     config.ps_cfg_home = Path(ps_cfg_home)
                 if ps_home := data.get("ps_home"):
@@ -192,8 +185,6 @@ class PsaConfig:
         # Only save non-default values
         if self.ps_base != Path(DEFAULT_PS_BASE):
             data["ps_base"] = str(self.ps_base)
-        if self.io_base != Path(DEFAULT_IO_BASE):
-            data["io_base"] = str(self.io_base)
         if self.ps_cfg_home:
             data["ps_cfg_home"] = str(self.ps_cfg_home)
         if self.ps_home:

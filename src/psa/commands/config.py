@@ -159,7 +159,6 @@ def config_show() -> None:
 
     console.print("\n[bold]Paths:[/bold]")
     console.print(f"  PS Base: {config.ps_base}")
-    console.print(f"  IO Base: {config.io_base}")
     if config.ps_cfg_home:
         console.print(f"  PS_CFG_HOME: {config.ps_cfg_home}")
     if config.ps_home:
@@ -180,23 +179,3 @@ def config_show() -> None:
     console.print(f"  sudo_enabled: {config.sudo_enabled}")
     console.print(f"  parallel_boot: {config.parallel_boot}")
     console.print(f"  skip_domain_confirm: {config.skip_domain_confirm}")
-
-    if config.ops.is_configured():
-        console.print("\n[bold]PSA-OPS:[/bold]")
-        console.print(f"  URL: {config.ops.url}")
-        if config.ops.node_id:
-            console.print(f"  Node ID: {config.ops.node_id[:8]}...")
-        if config.ops.environment_name:
-            console.print(f"  Environment: {config.ops.environment_name}")
-        if config.ops.tier:
-            console.print(f"  Tier: {config.ops.tier}")
-        if config.ops.pillar:
-            console.print(f"  Pillar: {config.ops.pillar}")
-        if config.ops.zone:
-            console.print(f"  Zone: {config.ops.zone}")
-        if config.ops.suppress_fact_warnings:
-            console.print(f"  Suppress fact warnings: {config.ops.suppress_fact_warnings}")
-        if config.ops.ps_role:
-            console.print(f"  Role: {config.ops.ps_role}")
-    else:
-        console.print("\n[yellow]PSA-OPS not configured[/yellow]")

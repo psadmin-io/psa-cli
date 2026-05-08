@@ -1955,7 +1955,7 @@ def sync(
         psa dpk sync --dpk-home /opt/oracle/psft/dpk
         psa dpk sync --hiera --site
         psa dpk sync --dry-run
-        psa dpk sync --dpk-cust-home /u01/app/io/dpk-cust
+        psa dpk sync --dpk-cust-home /u01/app/psa/dpk
     """
     # If none of the filter flags specified, sync all
     sync_all = not (do_hiera or do_site or do_environment_conf)

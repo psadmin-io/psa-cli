@@ -128,7 +128,6 @@ def base_config(tmp_path, config_file):
     """Return a PsaConfig with temporary paths, saved to disk."""
     config = PsaConfig()
     config.ps_base = tmp_path / "psoft"
-    config.io_base = tmp_path / "io"
     config.save(config_file)
     return config
 
