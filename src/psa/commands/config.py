@@ -97,6 +97,7 @@ SETTABLE_KEYS = {
     "dpk_repo_path": ("path", "Path to DPK file repository (PCM mount or local dir)"),
     "psa_kit_path": ("path", "Path to PSA Kit installation"),
     "dpk_base": ("path", "DPK install parent dir, e.g. /u01/app/psoft (DPK_HOME = dpk_base/dpk)"),
+    "dpk_home": ("path", "DPK install dir (overrides dpk_base/dpk)"),
     "dpk_cust_home": ("path", "Path to DPK customer customizations (DPK_CUST_HOME)"),
 }
 
@@ -158,7 +159,8 @@ def config_show() -> None:
         return
 
     console.print("\n[bold]Paths:[/bold]")
-    console.print(f"  PS Base: {config.ps_base}")
+    console.print(f"  DPK Base: {config.ps_base}")
+    console.print(f"  DPK Home: {config.get_dpk_home()}")
     if config.ps_cfg_home:
         console.print(f"  PS_CFG_HOME: {config.ps_cfg_home}")
     if config.ps_home:

@@ -47,6 +47,7 @@ class PsaConfig:
     ps_base: Path = field(default_factory=lambda: Path(DEFAULT_PS_BASE))
     psa_kit_path: Optional[Path] = None
     dpk_base: Optional[Path] = None  # DPK install parent dir; dpk_home is dpk_base/dpk
+    dpk_home: Optional[Path] = None  # DPK install dir; defaults to dpk_base/dpk
     dpk_cust_home: Optional[Path] = None
     ps_cfg_home: Optional[Path] = None
     ps_home: Optional[Path] = None
@@ -89,6 +90,9 @@ class PsaConfig:
         if dpk_base := os.environ.get("DPK_BASE"):
             config.dpk_base = Path(dpk_base)
 
+        if dpk_home := os.environ.get("DPK_HOME"):
+            config.dpk_home = Path(dpk_home)
+
         if dpk_cust := os.environ.get("DPK_CUST_HOME"):
             config.dpk_cust_home = Path(dpk_cust)
 
@@ -130,6 +134,8 @@ class PsaConfig:
                     config.psa_kit_path = Path(psa_kit_path)
                 if dpk_base := data.get("dpk_base"):
                     config.dpk_base = Path(dpk_base)
+                if dpk_home := data.get("dpk_home"):
+                    config.dpk_home = Path(dpk_home)
                 if dpk_cust_home := data.get("dpk_cust_home"):
                     config.dpk_cust_home = Path(dpk_cust_home)
                 if runtime_user := data.get("runtime_user", data.get("domain_user")):
@@ -197,6 +203,8 @@ class PsaConfig:
             data["psa_kit_path"] = str(self.psa_kit_path)
         if self.dpk_base:
             data["dpk_base"] = str(self.dpk_base)
+        if self.dpk_home:
+            data["dpk_home"] = str(self.dpk_home)
         if self.dpk_cust_home:
             data["dpk_cust_home"] = str(self.dpk_cust_home)
         if self.runtime_user != "psadm2":
@@ -248,6 +256,13 @@ class PsaConfig:
             return self.ps_cfg_home
         # Default location
         return self.ps_base / "cfg"
+
+    def get_dpk_home(self) -> Path:
+        """Get DPK_HOME: explicit dpk_home, else dpk_base/dpk, else ps_base/dpk."""
+        if self.dpk_home:
+            return self.dpk_home
+        base = self.dpk_base or self.ps_base
+        return base / "dpk"
 
     def get_appserv_path(self) -> Path:
         """Get path to appserver domains."""

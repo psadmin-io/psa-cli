@@ -383,13 +383,15 @@ def _get_env_path(env_var: str, cli_value: Optional[Path]) -> Optional[Path]:
 def _resolve_dpk_home(cli_value: Optional[Path]) -> Path:
     """Resolve DPK_HOME (the dpk install dir).
 
-    Order: cli -> $DPK_HOME -> config.dpk_base/dpk -> DEFAULT_DPK_HOME.
+    Order: cli -> $DPK_HOME -> config.dpk_home -> config.dpk_base/dpk -> DEFAULT_DPK_HOME.
     """
     if cli_value:
         return cli_value.resolve()
     if env := os.environ.get(ENV_DPK_HOME):
         return Path(env)
     cfg = get_config()
+    if cfg.dpk_home:
+        return cfg.dpk_home
     if cfg.dpk_base:
         return cfg.dpk_base / "dpk"
     return Path(DEFAULT_DPK_HOME)
