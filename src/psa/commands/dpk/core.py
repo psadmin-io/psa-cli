@@ -238,6 +238,7 @@ def _build_facter_env(
     pillar: Optional[str],
     zone: Optional[str],
     role: Optional[str],
+    quiet: bool = False,
 ) -> tuple[dict, list]:
     """Resolve fact precedence (CLI > server.yaml > config default) and
     build a FACTER_*-populated env dict.
@@ -245,7 +246,8 @@ def _build_facter_env(
     Only sets FACTER_* when the value comes from a CLI flag or config
     default; if server.yaml supplies the fact, leaves FACTER_* unset so
     Facter reads server.yaml directly. Side effect: prints
-    `Reading from server.yaml: ...` and `Setting fact: ...` info lines.
+    `Reading from server.yaml: ...` and `Setting fact: ...` info lines
+    (suppressed when ``quiet=True``).
 
     Returns (facter_env, defaulted_messages).
     """
@@ -280,7 +282,7 @@ def _build_facter_env(
         k for k in ("ps_role", "env", "ps_tier", "ps_zone", "ps_pillar")
         if k in server_facts
     ]
-    if server_provided:
+    if server_provided and not quiet:
         print_info(f"Reading from server.yaml: {', '.join(server_provided)}")
 
     facter_env = os.environ.copy()
@@ -295,7 +297,8 @@ def _build_facter_env(
         ):
             return
         facter_env[f"FACTER_{fact}"] = value
-        print_info(f"Setting fact: {fact}={value}")
+        if not quiet:
+            print_info(f"Setting fact: {fact}={value}")
 
     _set("env", env)
     _set("ps_tier", tier)
@@ -1136,12 +1139,24 @@ def apply(
     if debug:
         cmd.append("--debug")
 
+    # Resolve output mode early so the preamble can be replaced with a
+    # single header line in summary mode.
+    summary_counters: dict = {"warnings": 0, "notices": 0}
+    if summary and (verbose or debug):
+        # --verbose/--debug exist to show everything; honor them and ignore
+        # --summary rather than failing the run.
+        print_warning("--summary ignored when --verbose or --debug is set")
+        summary_active = False
+    else:
+        summary_active = summary
+
     # Load config and read server.yaml (Facter external facts).
     config = get_config()
     server_facts = _read_server_facts(config)
     facter_env, defaulted = _build_facter_env(
         config, server_facts,
         env=env, tier=tier, pillar=pillar, zone=zone, role=role,
+        quiet=summary_active,
     )
     if defaulted and not config.ops.suppress_fact_warnings:
         print_warning(f"Using config defaults: {', '.join(defaulted)}")
@@ -1153,7 +1168,8 @@ def apply(
     if effective_role:
         cls = ROLE_CLASS_MAP.get(effective_role)
         if cls:
-            print_info(f"Resolved ps_role={effective_role} -> {cls}")
+            if not summary_active:
+                print_info(f"Resolved ps_role={effective_role} -> {cls}")
         else:
             print_warning(
                 f"ps_role={effective_role!r} does not match any class in site.pp "
@@ -1167,16 +1183,28 @@ def apply(
 
     cmd, run_env = _wrap_with_sudo(cmd, facter_env, config)
 
-    print_info(f"Running: {' '.join(cmd)}")
-
-    summary_counters: dict = {"warnings": 0, "notices": 0}
-    if summary and (verbose or debug):
-        # --verbose/--debug exist to show everything; honor them and ignore
-        # --summary rather than failing the run.
-        print_warning("--summary ignored when --verbose or --debug is set")
-        summary_active = False
+    if summary_active:
+        # Replace the multi-line preamble with a single visually-distinct
+        # header so the user can see at a glance what's about to apply.
+        parts = []
+        env_v = env or server_facts.get("env") or config.ops.environment_name
+        role_v = effective_role
+        tier_v = tier or server_facts.get("ps_tier") or config.ops.tier
+        if env_v:
+            parts.append(f"env={env_v}")
+        if tier_v:
+            parts.append(f"tier={tier_v}")
+        if role_v:
+            cls_label = ROLE_CLASS_MAP.get(role_v)
+            parts.append(f"role={role_v}" + (f" ({cls_label})" if cls_label else ""))
+        title = "[bold cyan]Applying DPK[/bold cyan]"
+        if dry_run:
+            title += " [yellow](dry-run)[/yellow]"
+        if parts:
+            title += " · " + " · ".join(parts)
+        console.rule(title)
     else:
-        summary_active = summary
+        print_info(f"Running: {' '.join(cmd)}")
 
     # Puppet emits Warning/Notice/Error to stderr; filter both streams in
     # summary mode (shared counters) so suppression is symmetric. Default

@@ -618,6 +618,61 @@ def test_verbose_mode_does_not_filter_stderr(fake_dpk):
     assert captured["stderr_filter"] is None
 
 
+def test_summary_suppresses_preamble_and_prints_header(fake_dpk, monkeypatch):
+    """In summary mode, the chatty preamble is replaced by a single header rule."""
+    dpk, facts_d = fake_dpk
+    # Server.yaml provides ps_role so 'Reading from server.yaml' would normally print.
+    server_yaml = facts_d / "server.yaml"
+    server_yaml.write_text("ps_role: mid\n")
+
+    def fake_stream(cmd, **kwargs):
+        return 0, "Notice: Compiled catalog in 1.0 seconds\n", ""
+
+    config = PsaConfig(ops=OpsConfig(), sudo_enabled=False)
+    with patch("psa.commands.dpk.core.get_config", return_value=config), \
+         patch("psa.commands.dpk.core.stream_subprocess", side_effect=fake_stream), \
+         patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
+        result = runner.invoke(
+            dpk_app,
+            ["apply", "--dpk-home", str(dpk), "--env", "FSCMDV1", "--summary"],
+        )
+
+    assert result.exit_code == 0, result.output
+    # Preamble suppressed
+    assert "Reading from server.yaml" not in result.output
+    assert "Setting fact:" not in result.output
+    assert "Resolved ps_role" not in result.output
+    assert "Running:" not in result.output
+    # Header present with resolved facts
+    assert "Applying DPK" in result.output
+    assert "env=FSCMDV1" in result.output
+    assert "role=mid" in result.output
+
+
+def test_default_mode_keeps_preamble(fake_dpk):
+    """Without --summary, preamble lines are unchanged."""
+    result = _run(
+        fake_dpk,
+        rc=0,
+        stdout="Notice: Compiled catalog in 1.0 seconds\n",
+        extra_args=["--role", "mid", "--env", "FSCMDV1"],
+    )
+    assert "Setting fact:" in result.output
+    assert "Resolved ps_role=mid" in result.output
+    assert "Running:" in result.output
+
+
+def test_summary_header_marks_dry_run(fake_dpk):
+    result = _run(
+        fake_dpk,
+        rc=2,
+        stdout="Notice: Compiled catalog in 1.0 seconds\n",
+        extra_args=["--role", "mid", "--summary", "--dry-run"],
+    )
+    assert "Applying DPK" in result.output
+    assert "dry-run" in result.output
+
+
 def test_summary_handles_ansi_color_codes(fake_dpk):
     """Puppet wraps stderr lines in ANSI color escapes (yellow for Warning).
     The filter must strip ANSI before the prefix test."""
