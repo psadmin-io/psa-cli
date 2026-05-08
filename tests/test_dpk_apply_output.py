@@ -426,12 +426,38 @@ def test_summary_keeps_errors(fake_dpk):
     assert f("Error: Could not retrieve catalog\n") is True
 
 
-def test_summary_keeps_stage_state_changes(fake_dpk):
-    """Real state-change notices on Stage[] resources are kept (not Notify echoes)."""
+def test_summary_drops_per_resource_state_changes(fake_dpk):
+    """Per-resource Stage[] notices are noise in summary mode (allow-list rejects them)."""
     f, _ = _capture_summary_filter(fake_dpk)
-    assert f("Notice: /Stage[main]/Pt_setup/File[psoft.profile]/ensure: created\n") is True
-    assert f("Notice: /Stage[main]/Pt_profile::Pt_system::Users/User[psadm1]/password: changed [redacted] to [redacted]\n") is True
-    assert f("Notice: /Stage[main]/Pt_profile::Pt_appserver/Pt_appserver_domain[fscmdv1]/feature_settings: defined 'feature_settings' as ['PUBSUB=Yes']\n") is True
+    assert f("Notice: /Stage[main]/Pt_setup/File[psoft.profile]/ensure: created\n") is False
+    assert f("Notice: /Stage[main]/Pt_profile::Pt_system::Users/User[psadm1]/password: changed [redacted] to [redacted]\n") is False
+    assert f("Notice: /Stage[main]/Pt_profile::Pt_appserver/Pt_appserver_domain[fscmdv1]/feature_settings: defined 'feature_settings' as ['PUBSUB=Yes']\n") is False
+    assert f("Notice: The user psadm1 is present.\n") is False
+    assert f("Notice: Performing action sstatus on domain fscmdv1\n") is False
+
+
+def test_summary_keeps_top_level_applies(fake_dpk):
+    """`Notice: Applying pt|io_*::*` lines are phase markers — keep."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    assert f("Notice: Applying pt_role::pt_base\n") is True
+    assert f("Notice: Applying pt_profile::pt_appserver\n") is True
+    assert f("Notice: Applying io_role::io_tools_midtier\n") is True
+
+
+def test_summary_keeps_failure_notices(fake_dpk):
+    """Notice lines mentioning failure provide context for an Error — keep."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    assert f(
+        "Notice: /Stage[main]/Pt_profile::Pt_domain_boot/Exec[exec_systemd_start_state_psft-appserver-fscmdv1]"
+        "/returns: Job for psft-appserver-fscmdv1.service failed because the control process exited with error code.\n"
+    ) is True
+
+
+def test_summary_drops_blank_lines(fake_dpk):
+    """Blank / whitespace-only lines are dropped silently in summary mode."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    assert f("\n") is False
+    assert f("    \n") is False
 
 
 def test_summary_drops_notify_echo_single_line(fake_dpk):
@@ -513,7 +539,7 @@ def test_summary_block_printed_when_lines_hidden(fake_dpk):
 
     assert result.exit_code == 0
     assert "2 warnings hidden" in result.output
-    assert "1 notices hidden" in result.output
+    assert "2 notices hidden" in result.output
 
 
 def test_summary_block_omitted_when_nothing_hidden(fake_dpk):

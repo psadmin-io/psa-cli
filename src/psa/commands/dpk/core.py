@@ -1398,9 +1398,14 @@ _SUMMARY_DROP_WARNING_RES = [
     re.compile(r"^Warning:\s*ModuleLoader:"),
     re.compile(r"^Warning:\s*Undefined variable"),
 ]
-_SUMMARY_DROP_NOTICE_RES = [
-    re.compile(r"^Notice:\s*Scope\("),
-    re.compile(r"^Notice:\s*Local environment:"),
+# Allow-list for Notices in summary mode. Anything starting with "Notice:"
+# that doesn't match one of these is dropped (and counted).
+_SUMMARY_KEEP_NOTICE_RES = [
+    re.compile(r"^Notice:\s*<DPK"),                    # DPK milestone markers
+    re.compile(r"^Notice:\s*Compiled catalog"),
+    re.compile(r"^Notice:\s*Applied catalog"),
+    re.compile(r"^Notice:\s*Applying (pt|io)_\w+::"),  # top-level role/profile phases
+    re.compile(r"\bfail", re.IGNORECASE),              # any Notice mentioning failure
 ]
 # Notify-resource echo lines: puppet emits a `Notice: /Stage[...]/Notify[<msg>]/message:
 # defined 'message' as '<msg>'` immediately after every human-readable `Notice: <msg>`.
@@ -1414,17 +1419,24 @@ _SUMMARY_DROP_ECHO_RES = [
 
 
 def _puppet_summary_filter(line: str, counters: dict) -> bool:
-    """Wrap _puppet_default_filter; drop noisy Warning/Notice/echo lines.
+    """Wrap _puppet_default_filter; aggressive Notice/Warning suppression.
 
-    Errors are never dropped. Notify-message echoes are deduplicated silently
-    (the info appears on the previous line). Hidden warnings/notices increment
-    counters for the end-of-run summary.
+    Errors and Tuxedo error context are never dropped. Notice lines are kept
+    only if they match the allow-list (DPK milestones, top-level applies,
+    catalog status, failure context). Notify-message echoes and blank lines
+    are deduplicated silently. Hidden warnings/notices increment counters
+    for the end-of-run summary.
     """
     if not _puppet_default_filter(line):
         return False
     stripped = _strip_ansi(line).lstrip()
 
-    # Echo dedup: silent drop, no counter increment.
+    # Drop blank/whitespace-only lines (cleans up leftover separators around
+    # dropped notices). Silent — not counted.
+    if not stripped.strip():
+        return False
+
+    # Echo dedup: silent drop, no counter.
     if any(p.search(stripped) for p in _SUMMARY_DROP_ECHO_RES):
         return False
 
@@ -1435,9 +1447,10 @@ def _puppet_summary_filter(line: str, counters: dict) -> bool:
         return True
 
     if stripped.startswith("Notice:"):
-        if any(p.search(stripped) for p in _SUMMARY_DROP_NOTICE_RES):
-            counters["notices"] = counters.get("notices", 0) + 1
-            return False
+        if any(p.search(stripped) for p in _SUMMARY_KEEP_NOTICE_RES):
+            return True
+        counters["notices"] = counters.get("notices", 0) + 1
+        return False
 
     return True
 
