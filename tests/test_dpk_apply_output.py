@@ -389,3 +389,182 @@ def test_default_filter_drops_info_and_debug(fake_dpk):
     assert f("Info: chatty\n") is False
     assert f("Debug: noisy\n") is False
     assert f("  Info: indented\n") is False
+
+
+# --- Summary mode ---
+
+
+def _capture_summary_filter(fake_dpk):
+    """Run apply --summary; return the stdout_filter passed to stream_subprocess."""
+    captured = {}
+
+    def fake_stream(cmd, **kwargs):
+        captured["filter"] = kwargs.get("stdout_filter")
+        return 0, "Notice: Compiled catalog in 1.0 seconds\n", ""
+
+    dpk, facts_d = fake_dpk
+    with patch(
+        "psa.commands.dpk.core.get_config",
+        return_value=PsaConfig(ops=OpsConfig(), sudo_enabled=False),
+    ), patch(
+        "psa.commands.dpk.core.stream_subprocess", side_effect=fake_stream
+    ), patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
+        result = runner.invoke(dpk_app, ["apply", "--dpk-home", str(dpk), "--summary"])
+    return captured["filter"], result
+
+
+def test_summary_drops_deprecation_warning(fake_dpk):
+    """--summary drops 'is deprecated' Warning lines (and counts them)."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    assert f is not None
+    assert f("Warning: Setting templatedir is deprecated.\n") is False
+
+
+def test_summary_keeps_errors(fake_dpk):
+    """--summary never drops Error: lines."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    assert f("Error: Could not retrieve catalog\n") is True
+
+
+def test_summary_keeps_stage_state_changes(fake_dpk):
+    """Real state-change notices on Stage[] resources are kept (not Notify echoes)."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    assert f("Notice: /Stage[main]/Pt_setup/File[psoft.profile]/ensure: created\n") is True
+    assert f("Notice: /Stage[main]/Pt_profile::Pt_system::Users/User[psadm1]/password: changed [redacted] to [redacted]\n") is True
+    assert f("Notice: /Stage[main]/Pt_profile::Pt_appserver/Pt_appserver_domain[fscmdv1]/feature_settings: defined 'feature_settings' as ['PUBSUB=Yes']\n") is True
+
+
+def test_summary_drops_notify_echo_single_line(fake_dpk):
+    """The redundant `Notify[...]/message: defined 'message' as ...` echo is dropped."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    echo = (
+        "Notice: /Stage[main]/Pt_profile::Pt_system::Users/Notify[The user psadm1 is present.]"
+        "/message: defined 'message' as 'The user psadm1 is present.'\n"
+    )
+    assert f(echo) is False
+
+
+def test_summary_drops_notify_echo_multiline_pieces(fake_dpk):
+    """Both the opening (`Notice: /Stage[...]/Notify[`) and the continuation
+    (`...]/message: defined 'message' as ...`) of multi-line Notify echoes drop."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    opener = "Notice: /Stage[main]/Pt_profile::Pt_system/Notify[\n"
+    closer = "<DPKUSERS>...]/message: defined 'message' as \"\\n<DPKUSERS>...\"\n"
+    assert f(opener) is False
+    assert f(closer) is False
+
+
+def test_summary_keeps_dpk_milestone_notices(fake_dpk):
+    """`<DPK*>` milestone messages (real progress) are kept."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    assert f("Notice: <DPKAPPDOM> The Application Server domain [fscmdv1] creation is complete.\n") is True
+    assert f("Notice: <DPKBOOTPIADOM> The PIA domain [fscmdv1] is running.\n") is True
+
+
+def test_summary_keeps_compiled_and_applied_catalog(fake_dpk):
+    f, _ = _capture_summary_filter(fake_dpk)
+    assert f("Notice: Compiled catalog in 1.0 seconds\n") is True
+    assert f("Notice: Applied catalog in 12.34 seconds\n") is True
+
+
+def test_summary_drops_scope_notice(fake_dpk):
+    """Scope() notices are noise; dropped in --summary."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    assert f("Notice: Scope(Class[main]): something something\n") is False
+
+
+def test_summary_drops_unknown_variable_warning(fake_dpk):
+    f, _ = _capture_summary_filter(fake_dpk)
+    assert f("Warning: Unknown variable: 'foo'\n") is False
+
+
+def test_summary_keeps_compilation_warnings(fake_dpk):
+    """Generic Warning: lines (not in drop-list) are kept so config issues surface."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    assert f("Warning: Some compilation issue happened\n") is True
+
+
+def test_summary_block_printed_when_lines_hidden(fake_dpk):
+    """End-of-run summary lists hidden warning/notice counts."""
+    stdout = (
+        "Notice: Compiled catalog in 1.0 seconds\n"
+        "Warning: Setting templatedir is deprecated\n"
+        "Warning: Setting confdir is deprecated\n"
+        "Notice: Scope(Class[main]): noise\n"
+        "Notice: /Stage[main]/Pt_setup/File[x]/ensure: created\n"
+    )
+    dpk, facts_d = fake_dpk
+
+    def fake_stream(cmd, **kwargs):
+        f = kwargs.get("stdout_filter")
+        # Drive the filter so its counter is populated.
+        if f is not None:
+            for line in stdout.splitlines(keepends=True):
+                f(line)
+        return 0, stdout, ""
+
+    with patch(
+        "psa.commands.dpk.core.get_config",
+        return_value=PsaConfig(ops=OpsConfig(), sudo_enabled=False),
+    ), patch(
+        "psa.commands.dpk.core.stream_subprocess", side_effect=fake_stream
+    ), patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
+        result = runner.invoke(dpk_app, ["apply", "--dpk-home", str(dpk), "--summary"])
+
+    assert result.exit_code == 0
+    assert "2 warnings hidden" in result.output
+    assert "1 notices hidden" in result.output
+
+
+def test_summary_block_omitted_when_nothing_hidden(fake_dpk):
+    """Clean run with no dropped lines should not print a summary block."""
+    result = _run(
+        fake_dpk,
+        rc=0,
+        stdout="Notice: Compiled catalog in 1.0 seconds\n",
+        extra_args=["--summary"],
+    )
+    assert result.exit_code == 0
+    assert "warnings hidden" not in result.output
+    assert "notices hidden" not in result.output
+
+
+def test_verbose_overrides_summary(fake_dpk):
+    """--verbose wins over --summary; stdout_filter is None and a notice prints."""
+    captured = {}
+
+    def fake_stream(cmd, **kwargs):
+        captured["filter"] = kwargs.get("stdout_filter")
+        return 0, "Notice: Compiled catalog in 1.0 seconds\n", ""
+
+    dpk, facts_d = fake_dpk
+    with patch(
+        "psa.commands.dpk.core.get_config",
+        return_value=PsaConfig(ops=OpsConfig(), sudo_enabled=False),
+    ), patch(
+        "psa.commands.dpk.core.stream_subprocess", side_effect=fake_stream
+    ), patch("psa.commands.dpk.facts.FACTS_D_CANDIDATES", [str(facts_d)]):
+        result = runner.invoke(
+            dpk_app,
+            ["apply", "--dpk-home", str(dpk), "--summary", "--verbose"],
+        )
+
+    assert result.exit_code == 0
+    assert captured["filter"] is None
+    assert "ignored" in result.output
+
+
+def test_summary_does_not_break_stderr_error_scan(fake_dpk):
+    """--summary mode must still escalate fatal stderr errors."""
+    result = _run(
+        fake_dpk,
+        rc=0,
+        stdout="Notice: Compiled catalog in 0.03 seconds\n",
+        stderr=(
+            "Error: Function lookup() did not find a value for the name "
+            "'oracle_client_version'\n"
+        ),
+        extra_args=["--summary"],
+    )
+    assert result.exit_code == 1
+    assert "detected on stderr" in result.output

@@ -1072,6 +1072,13 @@ def apply(
         "-v",
         help="Stream full puppet output (Info/Debug lines included)",
     ),
+    summary: bool = typer.Option(
+        False,
+        "--summary",
+        "-s",
+        help="Terse output: drop deprecation warnings & noisy notices, "
+             "show end-of-run summary. Overridden by --verbose/--debug.",
+    ),
     dpk_home: Optional[Path] = typer.Option(
         None,
         "--dpk-home",
@@ -1162,7 +1169,22 @@ def apply(
 
     print_info(f"Running: {' '.join(cmd)}")
 
-    stdout_filter = None if verbose else _puppet_default_filter
+    summary_counters: dict = {"warnings": 0, "notices": 0}
+    if summary and (verbose or debug):
+        # --verbose/--debug exist to show everything; honor them and ignore
+        # --summary rather than failing the run.
+        print_warning("--summary ignored when --verbose or --debug is set")
+        summary_active = False
+    else:
+        summary_active = summary
+
+    if verbose:
+        stdout_filter = None
+    elif summary_active:
+        stdout_filter = lambda line: _puppet_summary_filter(line, summary_counters)
+    else:
+        stdout_filter = _puppet_default_filter
+
     try:
         rc, stdout_text, stderr_text = stream_subprocess(
             cmd,
@@ -1179,6 +1201,8 @@ def apply(
         raise typer.Exit(1)
 
     _emit_catalog_diagnostics(stdout_text, rc, dry_run)
+    if summary_active:
+        _emit_summary_block(summary_counters)
 
     # Stderr-error scan trumps exit code. Puppet --noop with --detailed-exitcodes
     # has been observed to exit 0 even when catalog compilation hits errors
@@ -1319,6 +1343,57 @@ def _puppet_default_filter(line: str) -> bool:
 _CATALOG_COMPILE_RE = re.compile(r"Compiled catalog .* in ([\d.]+) seconds")
 _NOTICE_CHANGE_RE = re.compile(r"^Notice: /Stage\[", re.MULTILINE)
 
+# --summary mode: layer additional drops on top of the default filter.
+# Tuned against real DPK apply transcripts.
+_SUMMARY_DROP_WARNING_RES = [
+    re.compile(r"^Warning:.*\bis deprecated\b"),
+    re.compile(r"^Warning:\s*Unknown variable:"),
+    re.compile(r"^Warning:\s*ModuleLoader:"),
+    re.compile(r"^Warning:\s*Undefined variable"),
+]
+_SUMMARY_DROP_NOTICE_RES = [
+    re.compile(r"^Notice:\s*Scope\("),
+    re.compile(r"^Notice:\s*Local environment:"),
+]
+# Notify-resource echo lines: puppet emits a `Notice: /Stage[...]/Notify[<msg>]/message:
+# defined 'message' as '<msg>'` immediately after every human-readable `Notice: <msg>`.
+# Pure duplication. Drop silently (don't count) since the info is on screen above.
+_SUMMARY_DROP_ECHO_RES = [
+    # Single-line and opening-line of multi-line echoes.
+    re.compile(r"^Notice:\s*/Stage\[.*?/Notify\["),
+    # Closing line of multi-line echoes (continuation that lands `]/message: defined 'message' as`).
+    re.compile(r"\]/message:\s*defined 'message' as"),
+]
+
+
+def _puppet_summary_filter(line: str, counters: dict) -> bool:
+    """Wrap _puppet_default_filter; drop noisy Warning/Notice/echo lines.
+
+    Errors are never dropped. Notify-message echoes are deduplicated silently
+    (the info appears on the previous line). Hidden warnings/notices increment
+    counters for the end-of-run summary.
+    """
+    if not _puppet_default_filter(line):
+        return False
+    stripped = line.lstrip()
+
+    # Echo dedup: silent drop, no counter increment.
+    if any(p.search(stripped) for p in _SUMMARY_DROP_ECHO_RES):
+        return False
+
+    if stripped.startswith("Warning:"):
+        if any(p.search(stripped) for p in _SUMMARY_DROP_WARNING_RES):
+            counters["warnings"] = counters.get("warnings", 0) + 1
+            return False
+        return True
+
+    if stripped.startswith("Notice:"):
+        if any(p.search(stripped) for p in _SUMMARY_DROP_NOTICE_RES):
+            counters["notices"] = counters.get("notices", 0) + 1
+            return False
+
+    return True
+
 # Patterns whose presence on stderr means the run failed, regardless of the
 # exit code puppet reported. See https://puppet.com/docs/puppet/latest/man/apply.html
 # - puppet --noop with --detailed-exitcodes can exit 0 while emitting these.
@@ -1358,6 +1433,22 @@ def _emit_catalog_diagnostics(stdout_text: str, rc: int, dry_run: bool) -> None:
     if changes:
         verb = "Would change" if dry_run else "Changed"
         print_info(f"{verb}: {changes} resources")
+
+
+def _emit_summary_block(counters: dict) -> None:
+    """Print one-line summary of what --summary mode hid. Skips when zero."""
+    warnings = counters.get("warnings", 0)
+    notices = counters.get("notices", 0)
+    if not (warnings or notices):
+        return
+    parts = []
+    if warnings:
+        parts.append(f"{warnings} warnings hidden")
+    if notices:
+        parts.append(f"{notices} notices hidden")
+    print_info(
+        "Summary: " + " • ".join(parts) + " (re-run with --verbose for full output)"
+    )
 
 
 def _detect_os_major_version() -> Optional[int]:
