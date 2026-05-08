@@ -63,15 +63,15 @@ class TestConfigShowDpk:
     def test_shows_dpk_base_and_default_dpk_home(self):
         cfg = PsaConfig()
         result = _invoke_show(cfg)
-        assert "DPK Base: /u01/app/psoft" in result.output
-        assert "DPK Home: /u01/app/psoft/dpk" in result.output
+        assert "DPK_BASE: /u01/app/psoft" in result.output
+        assert "DPK_HOME: /u01/app/psoft/dpk" in result.output
 
     def test_dpk_home_uses_dpk_base(self):
         cfg = PsaConfig(dpk_base=Path("/opt/oracle/psft"))
         result = _invoke_show(cfg)
-        assert "DPK Home: /opt/oracle/psft/dpk" in result.output
+        assert "DPK_HOME: /opt/oracle/psft/dpk" in result.output
 
     def test_dpk_home_explicit_overrides(self):
         cfg = PsaConfig(dpk_home=Path("/custom/dpk"))
         result = _invoke_show(cfg)
-        assert "DPK Home: /custom/dpk" in result.output
+        assert "DPK_HOME: /custom/dpk" in result.output

@@ -159,8 +159,10 @@ def config_show() -> None:
         return
 
     console.print("\n[bold]Paths:[/bold]")
-    console.print(f"  DPK Base: {config.ps_base}")
-    console.print(f"  DPK Home: {config.get_dpk_home()}")
+    console.print(f"  DPK_BASE: {config.ps_base}")
+    console.print(f"  DPK_HOME: {config.get_dpk_home()}")
+    if config.dpk_cust_home:
+        console.print(f"  DPK_CUST_HOME: {config.dpk_cust_home}")
     if config.ps_cfg_home:
         console.print(f"  PS_CFG_HOME: {config.ps_cfg_home}")
     if config.ps_home:
@@ -171,8 +173,6 @@ def config_show() -> None:
         console.print(f"  PS_CUST_HOME: {config.ps_cust_home}")
     if config.psa_kit_path:
         console.print(f"  PSA Kit: {config.psa_kit_path}")
-    if config.dpk_cust_home:
-        console.print(f"  DPK_CUST_HOME: {config.dpk_cust_home}")
     if config.multi_homes:
         console.print(f"  Multi-homes: {', '.join(str(p) for p in config.multi_homes)}")
     console.print(f"  Runtime user: {config.runtime_user}")
