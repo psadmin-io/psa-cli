@@ -618,6 +618,30 @@ def test_verbose_mode_does_not_filter_stderr(fake_dpk):
     assert captured["stderr_filter"] is None
 
 
+def test_summary_handles_ansi_color_codes(fake_dpk):
+    """Puppet wraps stderr lines in ANSI color escapes (yellow for Warning).
+    The filter must strip ANSI before the prefix test."""
+    f, _ = _capture_summary_filter(fake_dpk)
+    yellow_warning = (
+        "\x1b[1;33mWarning: Unknown variable: 'env_dpkprereq'."
+        " (file: /tmp/x.pp, line: 76)\x1b[0m\n"
+    )
+    assert f(yellow_warning) is False
+    yellow_scope = "\x1b[1;33mNotice: Scope(Class[Foo]): bar\x1b[0m\n"
+    assert f(yellow_scope) is False
+    # Errors still kept, even when wrapped.
+    red_error = "\x1b[1;31mError: Could not retrieve catalog\x1b[0m\n"
+    assert f(red_error) is True
+
+
+def test_default_filter_handles_ansi_info_debug(fake_dpk):
+    """Default filter (Info/Debug drop) must also handle ANSI-wrapped lines."""
+    from psa.commands.dpk.core import _puppet_default_filter
+    assert _puppet_default_filter("\x1b[0;36mInfo: chatty\x1b[0m\n") is False
+    assert _puppet_default_filter("\x1b[0;37mDebug: noisy\x1b[0m\n") is False
+    assert _puppet_default_filter("\x1b[1;33mWarning: keep me\x1b[0m\n") is True
+
+
 def test_summary_does_not_break_stderr_error_scan(fake_dpk):
     """--summary mode must still escalate fatal stderr errors."""
     result = _run(

@@ -1343,9 +1343,20 @@ def lookup(
 # we drop them; --verbose passes everything through.
 _PUPPET_QUIET_PREFIXES = ("Info:", "Debug:")
 
+# Puppet wraps lines in ANSI color escapes when stderr is a TTY (and sometimes
+# even when it's not, depending on color config). Strip them before prefix
+# tests so the filters work on color-enabled and color-disabled output alike.
+# We only strip for filter decisions — the original line (with colors) is
+# what gets written to the user's terminal.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(line: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", line)
+
 
 def _puppet_default_filter(line: str) -> bool:
-    return not line.lstrip().startswith(_PUPPET_QUIET_PREFIXES)
+    return not _strip_ansi(line).lstrip().startswith(_PUPPET_QUIET_PREFIXES)
 
 
 _CATALOG_COMPILE_RE = re.compile(r"Compiled catalog .* in ([\d.]+) seconds")
@@ -1383,7 +1394,7 @@ def _puppet_summary_filter(line: str, counters: dict) -> bool:
     """
     if not _puppet_default_filter(line):
         return False
-    stripped = line.lstrip()
+    stripped = _strip_ansi(line).lstrip()
 
     # Echo dedup: silent drop, no counter increment.
     if any(p.search(stripped) for p in _SUMMARY_DROP_ECHO_RES):
