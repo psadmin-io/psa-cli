@@ -216,10 +216,11 @@ def _parse_status_output(output: str, domain_type: str) -> str:
         if "bbl" in output_lower and "prog name" in output_lower:
             return "running"
     elif domain_type == "web":
-        if "running" in output_lower and "not running" not in output_lower:
-            return "running"
-        if "stopped" in output_lower or "not running" in output_lower:
+        # Stopped patterns first ("not started" must precede "started" check)
+        if "not started" in output_lower or "stopped" in output_lower or "not running" in output_lower:
             return "stopped"
+        if "started" in output_lower or "running" in output_lower:
+            return "running"
 
     return "unknown"
 

@@ -91,6 +91,13 @@ class TestParseStatusOutput:
     def test_web_not_running(self):
         assert _parse_status_output("PIA is not running", "web") == "stopped"
 
+    def test_web_started(self):
+        # PT 8.62 psadmin -w status emits just "started"
+        assert _parse_status_output("started\nPicked up _JAVA_OPTIONS: ...\n", "web") == "running"
+
+    def test_web_not_started(self):
+        assert _parse_status_output("not started", "web") == "stopped"
+
     def test_web_unknown(self):
         assert _parse_status_output("unexpected output", "web") == "unknown"
 
