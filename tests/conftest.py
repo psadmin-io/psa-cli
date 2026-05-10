@@ -86,16 +86,16 @@ def tmp_cfg_home(tmp_path):
     prcs_dir.mkdir(parents=True)
     (prcs_dir / "psprcs.cfg").write_text(SAMPLE_PSPRCS_CFG)
 
-    # PIA domain (flat layout) — needs config.xml for existence detection
-    pia_base = cfg_home / "webserv" / "TESTPIA"
-    (pia_base / "config").mkdir(parents=True)
-    (pia_base / "config" / "config.xml").write_text("<config/>")
-    pia_dir = pia_base / "applications" / "peoplesoft"
-    pia_dir.mkdir(parents=True)
-    (pia_dir / "configuration.properties").write_text(SAMPLE_CONFIGURATION_PROPERTIES)
+    # web domain (flat layout) — needs config.xml for existence detection
+    web_base = cfg_home / "webserv" / "TESTWEB"
+    (web_base / "config").mkdir(parents=True)
+    (web_base / "config" / "config.xml").write_text("<config/>")
+    web_dir = web_base / "applications" / "peoplesoft"
+    web_dir.mkdir(parents=True)
+    (web_dir / "configuration.properties").write_text(SAMPLE_CONFIGURATION_PROPERTIES)
 
-    # PIA domain (DPK layout) — config.properties under PORTAL.war
-    dpk_base = cfg_home / "webserv" / "DPKPIA"
+    # web domain (DPK layout) — config.properties under PORTAL.war
+    dpk_base = cfg_home / "webserv" / "DPKWEB"
     (dpk_base / "config").mkdir(parents=True)
     (dpk_base / "config" / "config.xml").write_text("<config/>")
     dpk_props = dpk_base / "applications" / "peoplesoft" / "PORTAL.war" / "WEB-INF" / "psftdocs" / "ps"

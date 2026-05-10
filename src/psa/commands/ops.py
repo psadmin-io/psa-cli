@@ -184,7 +184,7 @@ def set_env(
         None,
         "--type",
         "-t",
-        help="Domain type filter for disambiguation (app, prcs, pia)",
+        help="Domain type filter for disambiguation (app, prcs, web)",
     ),
 ) -> None:
     """

@@ -16,7 +16,7 @@ from psa.core.compare import (
     get_primary_config,
     list_archive_backups,
     parse_config_to_flat,
-    resolve_pia_config_path,
+    resolve_web_config_path,
 )
 from psa.core.config import PsaConfig, get_config
 from psa.core.discovery import run_discovery
@@ -149,7 +149,7 @@ def _execute_domain_command(
             "purge": executor.prcs_purge,
             "flush": executor.prcs_flush,
         },
-        "pia": {
+        "web": {
             "status": executor.web_status,
             "start": executor.web_start,
             "stop": executor.web_stop,
@@ -215,7 +215,7 @@ def _parse_status_output(output: str, domain_type: str) -> str:
         # tmadmin process table — BBL present means Tuxedo domain is booted
         if "bbl" in output_lower and "prog name" in output_lower:
             return "running"
-    elif domain_type == "pia":
+    elif domain_type == "web":
         if "running" in output_lower and "not running" not in output_lower:
             return "running"
         if "stopped" in output_lower or "not running" in output_lower:
@@ -276,7 +276,7 @@ def bounce(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia)",
+        help="Domain type (app, prcs, web)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
@@ -316,7 +316,7 @@ def bounce(
             warn_if=lambda r: _is_already_purged(r),
         )
 
-        if domain.domain_type != "pia":
+        if domain.domain_type != "web":
             run_step("Flushing IPC", lambda d=domain: _execute_domain_command(d, "flush", executor))
             run_step("Configuring", lambda d=domain: _execute_domain_command(d, "configure", executor))
 
@@ -355,13 +355,13 @@ def configure(
     Examples:
         psa domain configure APPDOM
         psa domain configure APPDOM --restart   # stop, configure, start
-        psa domain configure              # configure all (skips PIA)
+        psa domain configure              # configure all (skips web)
         psa domain configure --type app   # configure all app domains
     """
     _apply_verbosity(quiet, verbose)
-    domains = _resolve_targets(name, domain_type, skip_types={"pia"} if name is None else None)
-    if name is not None and domains[0].domain_type == "pia":
-        print_error("Configure not supported for PIA domains")
+    domains = _resolve_targets(name, domain_type, skip_types={"web"} if name is None else None)
+    if name is not None and domains[0].domain_type == "web":
+        print_error("Configure not supported for web domains")
         raise typer.Exit(1)
     if not _confirm_targets(domains, "configure", all_mode=name is None, force=force):
         raise typer.Abort()
@@ -418,10 +418,10 @@ def _resolve_api_domain_id(client: ApiClient, name: str) -> str:
 
 def _resolve_config_path(domain: DomainInfo, config_name: str, fileops: SudoFileOps) -> Path:
     """Resolve the live config file path for a domain."""
-    if domain.domain_type == "pia":
-        path = resolve_pia_config_path(fileops, domain.path)
+    if domain.domain_type == "web":
+        path = resolve_web_config_path(fileops, domain.path)
         if not path:
-            print_error(f"Cannot find configuration.properties for PIA domain '{domain.name}'")
+            print_error(f"Cannot find configuration.properties for web domain '{domain.name}'")
             raise typer.Exit(1)
         return path
     return domain.path / config_name
@@ -736,8 +736,8 @@ def compare(
 
     else:
         # Default: compare vs Archive backup
-        if domain.domain_type == "pia":
-            print_error("Archive comparison not supported for PIA domains. Use --ops or --file instead")
+        if domain.domain_type == "web":
+            print_error("Archive comparison not supported for web domains. Use --ops or --file instead")
             raise typer.Exit(1)
 
         archive_path = domain.path / "Archive"
@@ -818,13 +818,13 @@ def flush(
 
     Examples:
         psa domain flush APPDOM
-        psa domain flush              # flush all (skips PIA)
+        psa domain flush              # flush all (skips web)
         psa domain flush --type app   # flush all app domains
     """
     _apply_verbosity(quiet, verbose)
-    domains = _resolve_targets(name, domain_type, skip_types={"pia"} if name is None else None)
-    if name is not None and domains[0].domain_type == "pia":
-        print_warning("Flush not applicable for PIA domains")
+    domains = _resolve_targets(name, domain_type, skip_types={"web"} if name is None else None)
+    if name is not None and domains[0].domain_type == "web":
+        print_warning("Flush not applicable for web domains")
         return
     if not _confirm_targets(domains, "flush", all_mode=name is None, force=force):
         raise typer.Abort()
@@ -854,7 +854,7 @@ def kill(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia)",
+        help="Domain type (app, prcs, web)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
@@ -903,7 +903,7 @@ def list_domains(
         None,
         "--type",
         "-t",
-        help="Filter by domain type (app, prcs, pia)",
+        help="Filter by domain type (app, prcs, web)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -968,7 +968,7 @@ def purge(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia)",
+        help="Domain type (app, prcs, web)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
@@ -1024,7 +1024,7 @@ def restart(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia)",
+        help="Domain type (app, prcs, web)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
@@ -1085,7 +1085,7 @@ def start(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia)",
+        help="Domain type (app, prcs, web)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
@@ -1145,7 +1145,7 @@ def status(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia) - auto-detected if not specified",
+        help="Domain type (app, prcs, web) - auto-detected if not specified",
     ),
     report: bool = typer.Option(
         False,
@@ -1236,7 +1236,7 @@ def stop(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia)",
+        help="Domain type (app, prcs, web)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),

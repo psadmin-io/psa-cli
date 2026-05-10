@@ -47,7 +47,7 @@ class ArchiveFile:
 PRIMARY_CONFIGS = {
     "app": "psappsrv.cfg",
     "prcs": "psprcs.cfg",
-    "pia": "configuration.properties",
+    "web": "configuration.properties",
 }
 
 
@@ -215,11 +215,11 @@ def diff_configs(
     return changes
 
 
-def resolve_pia_config_path(
+def resolve_web_config_path(
     fileops: SudoFileOps,
     domain_path: Path,
 ) -> Optional[Path]:
-    """Find configuration.properties for a PIA domain.
+    """Find configuration.properties for a web (PIA) domain.
 
     Checks flat path first, then DPK WAR path — same logic as DomainDiscovery.
     """

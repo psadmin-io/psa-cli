@@ -76,8 +76,8 @@ class TestGetPrimaryConfig:
     def test_prcs(self):
         assert get_primary_config("prcs") == "psprcs.cfg"
 
-    def test_pia(self):
-        assert get_primary_config("pia") == "configuration.properties"
+    def test_web(self):
+        assert get_primary_config("web") == "configuration.properties"
 
 
 class TestListArchiveBackups:
@@ -221,12 +221,12 @@ def app_domain_info():
 
 
 @pytest.fixture
-def pia_domain_info():
+def web_domain_info():
     from psa.core.domain import DomainInfo
     return DomainInfo(
-        name="TESTPIA",
-        domain_type="pia",
-        path=Path("/cfg/webserv/TESTPIA"),
+        name="TESTWEB",
+        domain_type="web",
+        path=Path("/cfg/webserv/TESTWEB"),
     )
 
 
@@ -373,12 +373,12 @@ class TestCompareJsonOutput:
         assert isinstance(data["has_drift"], bool)
 
 
-class TestComparePiaArchiveBlocked:
+class TestCompareWebArchiveBlocked:
     @patch("psa.commands.domain.SudoFileOps")
     @patch("psa.commands.domain.get_config")
     @patch("psa.commands.domain._find_domain")
-    def test_pia_default_mode_errors(self, mock_find, mock_cfg, mock_fileops_cls, pia_domain_info, tmp_path):
-        mock_find.return_value = pia_domain_info
+    def test_web_default_mode_errors(self, mock_find, mock_cfg, mock_fileops_cls, web_domain_info, tmp_path):
+        mock_find.return_value = web_domain_info
         mock_cfg.return_value = PsaConfig(ps_cfg_home=tmp_path, sudo_enabled=False)
 
         mock_fileops = MagicMock()
@@ -386,7 +386,7 @@ class TestComparePiaArchiveBlocked:
         mock_fileops.read_text.return_value = "psserver=APPDOM\npsport=9100\n"
         mock_fileops.exists.side_effect = lambda p: "configuration.properties" in str(p)
 
-        result = runner.invoke(psa_app, ["domain", "compare", "TESTPIA"])
+        result = runner.invoke(psa_app, ["domain", "compare", "TESTWEB"])
         assert result.exit_code == 1
         assert "--ops" in result.output or "--file" in result.output
 
