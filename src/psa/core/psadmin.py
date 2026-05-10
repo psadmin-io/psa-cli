@@ -229,18 +229,12 @@ class PsadminExecutor:
         return self.run(["-w", "status", "-d", domain], ps_cfg_home)
 
     def web_start(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
-        """Start web server domain."""
-        # Use startPIA.sh script
-        cfg_home = ps_cfg_home or self.config.get_ps_cfg_home()
-        script = cfg_home / "webserv" / domain / "bin" / "startPIA.sh"
-        return self._run_web_script(script, domain)
+        """Start web server domain via psadmin -w start."""
+        return self.run(["-w", "start", "-d", domain], ps_cfg_home)
 
     def web_stop(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
-        """Stop web server domain."""
-        # Use stopPIA.sh script
-        cfg_home = ps_cfg_home or self.config.get_ps_cfg_home()
-        script = cfg_home / "webserv" / domain / "bin" / "stopPIA.sh"
-        return self._run_web_script(script, domain)
+        """Stop web server domain via psadmin -w shutdown."""
+        return self.run(["-w", "shutdown", "-d", domain], ps_cfg_home)
 
     def web_kill(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
         """Force stop web server domain."""
@@ -292,46 +286,3 @@ class PsadminExecutor:
                 command=shell_cmd,
             )
 
-    def _run_web_script(self, script: Path, domain: str) -> PsadminResult:
-        """Run a web server script (startPIA.sh or stopPIA.sh)."""
-        # Check existence via sudo when needed (webserv/ may be 750)
-        if not self._is_runtime_user() and self.config.sudo_enabled:
-            check = subprocess.run(
-                ["sudo", "su", "-", self.config.runtime_user, "-c", f"test -e {script}"],
-                capture_output=True, timeout=10,
-            )
-            script_exists = check.returncode == 0
-        else:
-            script_exists = script.exists()
-        if not script_exists:
-            return PsadminResult(
-                success=False,
-                exit_code=1,
-                output=f"Script not found: {script}",
-                command=str(script),
-            )
-
-        cmd = [str(script)]
-        if not self._is_runtime_user() and self.config.sudo_enabled:
-            cmd = ["sudo", "su", "-", self.config.runtime_user, "-c", str(script)]
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            return PsadminResult(
-                success=result.returncode == 0,
-                exit_code=result.returncode,
-                output=result.stdout + result.stderr,
-                command=" ".join(cmd),
-            )
-        except Exception as e:
-            return PsadminResult(
-                success=False,
-                exit_code=1,
-                output=str(e),
-                command=" ".join(cmd),
-            )
