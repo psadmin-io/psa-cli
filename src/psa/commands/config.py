@@ -93,6 +93,8 @@ SETTABLE_KEYS = {
     "parallel_boot": ("bool", "Use parallelboot instead of boot"),
     "sudo_enabled": ("bool", "Use sudo to run commands as runtime_user"),
     "runtime_user": ("str", "OS user for domain commands"),
+    "ps_base": ("path", "PeopleSoft install parent dir, e.g. /u01/app/psoft"),
+    "ps_home": ("path", "Path to PS_HOME (PeopleTools install dir)"),
     "ps_cfg_home": ("path", "Path to PS_CFG_HOME (PeopleSoft domains root)"),
     "dpk_repo_path": ("path", "Path to DPK file repository (PCM mount or local dir)"),
     "psa_kit_path": ("path", "Path to PSA Kit installation"),
