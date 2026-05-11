@@ -318,6 +318,64 @@ class TestCleanupOrchestration:
     @patch("psa.commands.dpk.core.run_discovery")
     @patch("psa.commands.dpk.core.dpk_services.remove_unit")
     @patch("psa.commands.dpk.core.dpk_services.daemon_reload")
+    def test_domain_name_without_type_matches_all_types(
+        self, mock_reload, mock_remove_unit, mock_discover, mock_fileops_cls, mock_exec_cls
+    ):
+        """`--domain ihlab` (no --type) cleans up app+prcs+web with the same name."""
+        mock_discover.return_value = [
+            _domain("ihlab", "app"),
+            _domain("ihlab", "prcs"),
+            _domain("ihlab", "web"),
+            _domain("OTHER", "app"),
+        ]
+        fileops = MagicMock()
+        fileops.exists.return_value = False
+        mock_fileops_cls.return_value = fileops
+        mock_remove_unit.return_value = dpk_services.ServiceOpResult(success=True, output="ok")
+        mock_reload.return_value = dpk_services.ServiceOpResult(success=True, output="ok")
+
+        with patch("psa.commands.domain._execute_domain_command", return_value=OK):
+            _cleanup_domains_only(
+                domain="ihlab", domain_type=None, keep_services=False, force=True, dry_run=False
+            )
+
+        # All three ihlab types had their unit removed; OTHER was not touched
+        called_types = sorted(c.args[0] for c in mock_remove_unit.call_args_list)
+        assert called_types == ["app", "prcs", "web"]
+        for c in mock_remove_unit.call_args_list:
+            assert c.args[1] == "ihlab"
+
+    @patch("psa.commands.dpk.core.PsadminExecutor")
+    @patch("psa.commands.dpk.core.SudoFileOps")
+    @patch("psa.commands.dpk.core.run_discovery")
+    @patch("psa.commands.dpk.core.dpk_services.remove_unit")
+    @patch("psa.commands.dpk.core.dpk_services.daemon_reload")
+    def test_domain_name_with_type_scopes_to_single(
+        self, mock_reload, mock_remove_unit, mock_discover, mock_fileops_cls, mock_exec_cls
+    ):
+        """`--domain ihlab --type web` cleans only the web instance."""
+        # run_discovery is called with domain_type="web", so it only returns web here
+        mock_discover.return_value = [_domain("ihlab", "web")]
+        fileops = MagicMock()
+        fileops.exists.return_value = False
+        mock_fileops_cls.return_value = fileops
+        mock_remove_unit.return_value = dpk_services.ServiceOpResult(success=True, output="ok")
+        mock_reload.return_value = dpk_services.ServiceOpResult(success=True, output="ok")
+
+        with patch("psa.commands.domain._execute_domain_command", return_value=OK):
+            _cleanup_domains_only(
+                domain="ihlab", domain_type="web", keep_services=False, force=True, dry_run=False
+            )
+
+        mock_discover.assert_called_once()
+        assert mock_discover.call_args.args[1] == "web"
+        mock_remove_unit.assert_called_once_with("web", "ihlab")
+
+    @patch("psa.commands.dpk.core.PsadminExecutor")
+    @patch("psa.commands.dpk.core.SudoFileOps")
+    @patch("psa.commands.dpk.core.run_discovery")
+    @patch("psa.commands.dpk.core.dpk_services.remove_unit")
+    @patch("psa.commands.dpk.core.dpk_services.daemon_reload")
     @patch("psa.commands.dpk.core._sudo_rm_rf")
     def test_rm_fallback_when_domain_dir_remains(
         self, mock_rm, mock_reload, mock_remove_unit, mock_discover, mock_fileops_cls, mock_exec_cls

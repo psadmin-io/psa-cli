@@ -1008,19 +1008,18 @@ def _cleanup_domains_only(
 
     config = get_config()
 
-    # Resolve targets
+    # Resolve targets. When --domain is given without --type, gather ALL
+    # matching domains across types — DPK installs the same name as app+prcs+web
+    # and we want one invocation to clean up all three.
     if domain:
-        from psa.core.domain import DomainDiscovery
-        discovery = DomainDiscovery(config)
         try:
-            target = discovery.find_domain(domain, domain_type)
-        except Exception as e:
-            print_error(f"Discovery failed: {e}")
-            raise typer.Exit(1)
-        if not target:
+            all_for_type = run_discovery(config, domain_type)
+        except typer.Exit:
+            raise
+        targets = [d for d in all_for_type if d.name == domain]
+        if not targets:
             print_error(f"Domain '{domain}' not found")
             raise typer.Exit(1)
-        targets = [target]
     else:
         targets = run_discovery(config, domain_type)
         if not targets:
