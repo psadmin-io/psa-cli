@@ -77,6 +77,7 @@ class PsadminExecutor:
         args: list[str],
         ps_cfg_home: Optional[Path] = None,
         timeout: int = 300,
+        stdin_input: Optional[str] = None,
     ) -> PsadminResult:
         """Run a psadmin command.
 
@@ -84,6 +85,8 @@ class PsadminExecutor:
             args: Arguments to pass to psadmin (e.g., ["-c", "sstatus", "-d", "APPDOM"])
             ps_cfg_home: Optional PS_CFG_HOME override
             timeout: Command timeout in seconds
+            stdin_input: Optional string fed to the process stdin (for interactive
+                psadmin actions like ``delete`` that prompt for Y/N).
 
         Returns:
             PsadminResult with success status, exit code, and output
@@ -97,6 +100,7 @@ class PsadminExecutor:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                input=stdin_input,
             )
             return PsadminResult(
                 success=result.returncode == 0,
@@ -173,6 +177,10 @@ class PsadminExecutor:
         """Flush appserver domain IPC."""
         return self.run(["-c", "cleanipc", "-d", domain], ps_cfg_home)
 
+    def app_delete(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
+        """Delete appserver domain config via psadmin (interactive: pipes 'y')."""
+        return self.run(["-c", "delete", "-d", domain], ps_cfg_home, stdin_input="y\ny\n")
+
     # Process scheduler domain commands
     def prcs_status(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
         """Get process scheduler domain status."""
@@ -197,6 +205,10 @@ class PsadminExecutor:
     def prcs_flush(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
         """Flush process scheduler domain IPC."""
         return self.run(["-p", "cleanipc", "-d", domain], ps_cfg_home)
+
+    def prcs_delete(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
+        """Delete process scheduler domain config via psadmin (interactive: pipes 'y')."""
+        return self.run(["-p", "delete", "-d", domain], ps_cfg_home, stdin_input="y\ny\n")
 
     def prcs_purge(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
         """Purge process scheduler domain cache."""
@@ -260,6 +272,10 @@ class PsadminExecutor:
                 output=str(e),
                 command=cmd,
             )
+
+    def web_delete(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
+        """Delete web (PIA) domain config via psadmin (interactive: pipes 'y')."""
+        return self.run(["-w", "delete", "-d", domain], ps_cfg_home, stdin_input="y\ny\n")
 
     def web_purge(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
         """Purge web server domain cache."""

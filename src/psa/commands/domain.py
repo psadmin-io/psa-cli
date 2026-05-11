@@ -139,6 +139,7 @@ def _execute_domain_command(
             "configure": executor.app_configure,
             "purge": executor.app_purge,
             "flush": executor.app_flush,
+            "delete": executor.app_delete,
         },
         "prcs": {
             "status": executor.prcs_status,
@@ -148,6 +149,7 @@ def _execute_domain_command(
             "configure": executor.prcs_configure,
             "purge": executor.prcs_purge,
             "flush": executor.prcs_flush,
+            "delete": executor.prcs_delete,
         },
         "web": {
             "status": executor.web_status,
@@ -155,6 +157,7 @@ def _execute_domain_command(
             "stop": executor.web_stop,
             "kill": executor.web_kill,
             "purge": executor.web_purge,
+            "delete": executor.web_delete,
         },
     }
 

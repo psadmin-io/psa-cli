@@ -12,10 +12,22 @@ from typing import List, NamedTuple, Optional, Union
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
+from psa.core import dpk_services
 from psa.core.config import PsaConfig, get_config
+from psa.core.discovery import run_discovery
+from psa.core.domain import DomainInfo
 from psa.core.fileops import SudoFileOps
-from psa.core.output import print_error, print_info, print_json, print_success, print_warning
+from psa.core.output import (
+    print_error,
+    print_info,
+    print_json,
+    print_success,
+    print_warning,
+    run_step,
+)
+from psa.core.psadmin import PsadminExecutor, PsadminResult
 from psa.core.subprocess_runner import print_stderr_on_failure, stream_subprocess
 
 console = Console()
@@ -853,6 +865,29 @@ def cleanup(
         "-b",
         help=f"PeopleSoft base directory (or ${ENV_DPK_BASE})",
     ),
+    domains_only: bool = typer.Option(
+        False,
+        "--domains-only",
+        help="Remove only domains + their DPK systemd units; keep PS_HOME, Tuxedo, WebLogic, DPK install intact",
+    ),
+    domain: Optional[str] = typer.Option(
+        None,
+        "--domain",
+        "-d",
+        help="With --domains-only, scope cleanup to a single domain by name",
+    ),
+    domain_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="With --domains-only, restrict to a domain type (app, prcs, web)",
+    ),
+    keep_services: bool = typer.Option(
+        False,
+        "--keep-services",
+        help="With --domains-only, skip systemd unit removal (config-only cleanup)",
+    ),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -863,13 +898,30 @@ def cleanup(
     """
     Clean up DPK installation
 
-    Runs the DPK cleanup script to remove installed software and components.
-    Wrapper for: ./psft-dpk-setup.sh --cleanup --psft_base_dir <path>
+    Default: full DPK teardown via psft-dpk-setup.sh --cleanup.
+    With --domains-only: scoped removal of domain configs + DPK systemd units.
 
     Examples:
         psa dpk cleanup --base-dir /u01/psft
-        psa dpk cleanup --dry-run
+        psa dpk cleanup --domains-only
+        psa dpk cleanup --domains-only --domain APPDOM --type app
+        psa dpk cleanup --domains-only --keep-services --dry-run
     """
+    if domains_only:
+        _cleanup_domains_only(
+            domain=domain,
+            domain_type=domain_type,
+            keep_services=keep_services,
+            force=force,
+            dry_run=dry_run,
+        )
+        return
+
+    # Scoping flags only make sense with --domains-only
+    if domain or domain_type or keep_services:
+        print_error("--domain/--type/--keep-services require --domains-only")
+        raise typer.Exit(2)
+
     # Resolve paths
     install_path = _get_env_path(ENV_DPK_INSTALL, install_dir)
     base_path = _get_env_path(ENV_DPK_BASE, base_dir)
@@ -913,6 +965,165 @@ def cleanup(
     except subprocess.TimeoutExpired:
         print_error("Cleanup timed out")
         raise typer.Exit(1)
+
+
+def _sudo_rm_rf(path: Path, timeout: int = 60) -> PsadminResult:
+    """Recursively remove ``path`` as root. Wrapped as PsadminResult for run_step.
+
+    Uses sudo when not already root. The literal ``rm -rf`` (no glob/expansion).
+    """
+    cmd = ["rm", "-rf", str(path)]
+    if os.geteuid() != 0:
+        cmd = ["sudo"] + cmd
+    cmd_str = " ".join(cmd)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return PsadminResult(
+            success=r.returncode == 0,
+            exit_code=r.returncode,
+            output=(r.stdout + r.stderr).strip() or f"Removed {path}",
+            command=cmd_str,
+        )
+    except subprocess.TimeoutExpired:
+        return PsadminResult(success=False, exit_code=-1, output="rm timed out", command=cmd_str)
+    except Exception as e:
+        return PsadminResult(success=False, exit_code=-1, output=str(e), command=cmd_str)
+
+
+def _cleanup_domains_only(
+    domain: Optional[str],
+    domain_type: Optional[str],
+    keep_services: bool,
+    force: bool,
+    dry_run: bool,
+) -> None:
+    """Scoped cleanup: remove domain configs + DPK systemd units.
+
+    Per-domain flow: stop -> kill (if needed) -> psadmin delete -> rm -rf fallback
+    -> systemd unit teardown. Single trailing daemon-reload.
+    """
+    # Local import to keep psa.commands.dpk.core importable without pulling in
+    # the domain command surface up-front (and to dodge any future circular-import risk).
+    from psa.commands.domain import _execute_domain_command, _is_already_stopped
+
+    config = get_config()
+
+    # Resolve targets
+    if domain:
+        from psa.core.domain import DomainDiscovery
+        discovery = DomainDiscovery(config)
+        try:
+            target = discovery.find_domain(domain, domain_type)
+        except Exception as e:
+            print_error(f"Discovery failed: {e}")
+            raise typer.Exit(1)
+        if not target:
+            print_error(f"Domain '{domain}' not found")
+            raise typer.Exit(1)
+        targets = [target]
+    else:
+        targets = run_discovery(config, domain_type)
+        if not targets:
+            print_error("No domains found")
+            raise typer.Exit(1)
+
+    # Build preview table
+    table = Table(title="Cleanup targets (--domains-only)")
+    table.add_column("Name", style="cyan")
+    table.add_column("Type", style="magenta")
+    table.add_column("Path")
+    table.add_column("Systemd unit")
+    for d in targets:
+        if keep_services:
+            unit_label = "[dim](kept)[/dim]"
+        else:
+            try:
+                unit = dpk_services.unit_name(d.domain_type, d.name)
+                paths = dpk_services.find_unit_paths(unit)
+                unit_label = ", ".join(str(p) for p in paths) if paths else "[dim](none)[/dim]"
+            except ValueError:
+                unit_label = "[dim](unknown type)[/dim]"
+        table.add_row(d.name, d.domain_type, str(d.path), unit_label)
+    console.print(table)
+    print_info(
+        "PS_HOME, Tuxedo, WebLogic, DB client, and DPK install dir will NOT be touched."
+    )
+
+    if dry_run:
+        console.print("[dim]Dry run - not executing[/dim]")
+        return
+
+    if not force:
+        if not typer.confirm(f"Remove {len(targets)} domain(s)?"):
+            raise typer.Abort()
+
+    executor = PsadminExecutor(config)
+    fileops = SudoFileOps(config)
+    failed = 0
+
+    for d in targets:
+        print_info(f"Cleaning {d.domain_type} domain: {d.name}")
+
+        # 1. Stop (graceful) — already-stopped treated as warning, not error
+        stop_result = run_step(
+            "Stopping",
+            lambda d=d: _execute_domain_command(d, "stop", executor),
+            warn_if=lambda r, d=d: _is_already_stopped(r, d),
+        )
+
+        # 2. Kill if stop failed and not already stopped
+        if not stop_result.success and not _is_already_stopped(stop_result, d):
+            run_step(
+                "Killing",
+                lambda d=d: _execute_domain_command(d, "kill", executor),
+                warn_if=lambda r, d=d: _is_already_stopped(r, d),
+            )
+
+        # 3. psadmin delete
+        delete_result = run_step(
+            "psadmin delete",
+            lambda d=d: _execute_domain_command(d, "delete", executor),
+        )
+
+        # 4. rm -rf fallback if dir still exists
+        if fileops.exists(d.path):
+            rm_result = run_step(
+                "Removing domain directory",
+                lambda p=d.path: _sudo_rm_rf(p),
+            )
+            if not rm_result.success:
+                print_error(f"Failed to remove {d.path}: {rm_result.output}")
+                failed += 1
+                continue
+        elif not delete_result.success:
+            # psadmin delete may have succeeded structurally even if it
+            # reported non-zero; only flag as failure if dir still exists.
+            print_warning(f"psadmin delete reported: {delete_result.output.strip()[:200]}")
+
+        # 5. Systemd unit teardown
+        if not keep_services:
+            svc_result = run_step(
+                f"Removing systemd unit psft-*-{d.name}",
+                lambda d=d: dpk_services.remove_unit(d.domain_type, d.name),
+            )
+            if not svc_result.success:
+                print_error(f"Service removal failed: {svc_result.output}")
+                failed += 1
+                continue
+
+        print_success(f"Domain {d.name} cleaned up")
+
+    # Single trailing daemon-reload
+    if not keep_services:
+        run_step(
+            "systemctl daemon-reload",
+            lambda: dpk_services.daemon_reload(),
+        )
+
+    if failed:
+        print_warning(f"{len(targets) - failed}/{len(targets)} succeeded, {failed} failed")
+        raise typer.Exit(1)
+    print_success("Domain cleanup complete")
 
 
 @app.command("status")
