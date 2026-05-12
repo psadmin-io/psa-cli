@@ -19,7 +19,7 @@ class DomainInfo:
     """Information about a PeopleSoft domain."""
 
     name: str
-    domain_type: str  # app, prcs, pia
+    domain_type: str  # app, prcs, web
     path: Path
     ps_cfg_home: Optional[Path] = None  # PS_CFG_HOME this domain belongs to
     status: str = "unknown"
@@ -68,7 +68,7 @@ class DomainDiscovery:
         domains = []
         domains.extend(self.discover_appserver_domains(ps_cfg_home))
         domains.extend(self.discover_prcs_domains(ps_cfg_home))
-        domains.extend(self.discover_pia_domains(ps_cfg_home))
+        domains.extend(self.discover_web_domains(ps_cfg_home))
         return domains
 
     def discover_all_homes(self) -> list[DomainInfo]:
@@ -87,7 +87,7 @@ class DomainDiscovery:
 
         Args:
             name: Domain name to find
-            domain_type: Optional type filter (app, prcs, pia)
+            domain_type: Optional type filter (app, prcs, web)
 
         Returns:
             DomainInfo if found, None otherwise
@@ -99,8 +99,8 @@ class DomainDiscovery:
                     domains = self.discover_appserver_domains(cfg_home)
                 elif domain_type == "prcs":
                     domains = self.discover_prcs_domains(cfg_home)
-                elif domain_type == "pia":
-                    domains = self.discover_pia_domains(cfg_home)
+                elif domain_type == "web":
+                    domains = self.discover_web_domains(cfg_home)
                 else:
                     domains = []
             else:
@@ -180,8 +180,8 @@ class DomainDiscovery:
 
         return domains
 
-    def discover_pia_domains(self, ps_cfg_home: Optional[Path] = None) -> list[DomainInfo]:
-        """Discover PIA (web server) domains."""
+    def discover_web_domains(self, ps_cfg_home: Optional[Path] = None) -> list[DomainInfo]:
+        """Discover web server (PIA) domains."""
         domains = []
         cfg_home = ps_cfg_home or self.config.get_ps_cfg_home()
         webserv_path = cfg_home / "webserv"
@@ -202,7 +202,7 @@ class DomainDiscovery:
 
             domain = DomainInfo(
                 name=name,
-                domain_type="pia",
+                domain_type="web",
                 path=domain_dir,
                 ps_cfg_home=cfg_home,
             )
@@ -223,12 +223,12 @@ class DomainDiscovery:
                                 break
 
             if config_props:
-                domain.config = self._parse_pia_config(config_props)
+                domain.config = self._parse_web_config(config_props)
                 raw_config = self._read_config_file(config_props)
                 if raw_config:
                     domain.config_files.append(raw_config)
 
-            domain.status = self._check_pia_status(domain_dir)
+            domain.status = self._check_web_status(domain_dir)
             domains.append(domain)
 
         return domains
@@ -283,8 +283,8 @@ class DomainDiscovery:
 
         return config
 
-    def _parse_pia_config(self, config_file: Path) -> dict[str, Any]:
-        """Parse PIA configuration.properties file."""
+    def _parse_web_config(self, config_file: Path) -> dict[str, Any]:
+        """Parse web (PIA) configuration.properties file."""
         config = {}
         content = self.fileops.read_text(config_file)
         if not content:
@@ -324,8 +324,8 @@ class DomainDiscovery:
             return "unknown"  # can't tell running vs stopped from file alone
         return "stopped"
 
-    def _check_pia_status(self, domain_path: Path) -> str:
-        """Check if a PIA domain is running via filesystem."""
+    def _check_web_status(self, domain_path: Path) -> str:
+        """Check if a web (PIA) domain is running via filesystem."""
         pid_file = domain_path / "servers" / "PIA" / "tmp" / "PIA.pid"
         if self.fileops.exists(pid_file):
             return "unknown"  # PID exists, might be running

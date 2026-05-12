@@ -6,7 +6,7 @@ from unittest.mock import patch, PropertyMock
 from typer.testing import CliRunner
 
 from psa.cli import app as psa_app
-from psa.core.config import OpsConfig, PsaConfig
+from psa.core.config import PsaConfig
 
 runner = CliRunner()
 
@@ -59,23 +59,19 @@ class TestConfigShowOptions:
         assert "skip_domain_confirm: True" in result.output
 
 
-class TestConfigShowOps:
-    def test_shows_zone(self):
-        cfg = PsaConfig(ops=OpsConfig(url="http://ops:8000", zone="zone1"))
+class TestConfigShowDpk:
+    def test_shows_dpk_base_and_default_dpk_home(self):
+        cfg = PsaConfig()
         result = _invoke_show(cfg)
-        assert "Zone: zone1" in result.output
+        assert "DPK_BASE: /u01/app/psoft" in result.output
+        assert "DPK_HOME: /u01/app/psoft/dpk" in result.output
 
-    def test_shows_suppress_fact_warnings(self):
-        cfg = PsaConfig(ops=OpsConfig(url="http://ops:8000", suppress_fact_warnings=True))
+    def test_dpk_home_uses_dpk_base(self):
+        cfg = PsaConfig(dpk_base=Path("/opt/oracle/psft"))
         result = _invoke_show(cfg)
-        assert "Suppress fact warnings: True" in result.output
+        assert "DPK_HOME: /opt/oracle/psft/dpk" in result.output
 
-    def test_hides_zone_when_unset(self):
-        cfg = PsaConfig(ops=OpsConfig(url="http://ops:8000"))
+    def test_dpk_home_explicit_overrides(self):
+        cfg = PsaConfig(dpk_home=Path("/custom/dpk"))
         result = _invoke_show(cfg)
-        assert "Zone" not in result.output
-
-    def test_hides_suppress_when_false(self):
-        cfg = PsaConfig(ops=OpsConfig(url="http://ops:8000", suppress_fact_warnings=False))
-        result = _invoke_show(cfg)
-        assert "Suppress fact warnings" not in result.output
+        assert "DPK_HOME: /custom/dpk" in result.output

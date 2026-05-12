@@ -5,6 +5,21 @@ from pathlib import Path
 import pytest
 
 from psa.core.config import OpsConfig, PsaConfig
+from psa.core.output import Verbosity, set_verbosity
+
+
+@pytest.fixture(autouse=True)
+def _reset_verbosity():
+    """Reset module-global verbosity before/after each test.
+
+    psa.core.output holds verbosity in a module-global. Tests that invoke CLI
+    commands with --quiet (or call set_verbosity directly) leave it stuck at
+    QUIET, which silently suppresses print_info in subsequent tests and breaks
+    output-dependent assertions.
+    """
+    set_verbosity(Verbosity.DEFAULT)
+    yield
+    set_verbosity(Verbosity.DEFAULT)
 
 
 # --- Sample config file content ---
@@ -71,16 +86,16 @@ def tmp_cfg_home(tmp_path):
     prcs_dir.mkdir(parents=True)
     (prcs_dir / "psprcs.cfg").write_text(SAMPLE_PSPRCS_CFG)
 
-    # PIA domain (flat layout) — needs config.xml for existence detection
-    pia_base = cfg_home / "webserv" / "TESTPIA"
-    (pia_base / "config").mkdir(parents=True)
-    (pia_base / "config" / "config.xml").write_text("<config/>")
-    pia_dir = pia_base / "applications" / "peoplesoft"
-    pia_dir.mkdir(parents=True)
-    (pia_dir / "configuration.properties").write_text(SAMPLE_CONFIGURATION_PROPERTIES)
+    # web domain (flat layout) — needs config.xml for existence detection
+    web_base = cfg_home / "webserv" / "TESTWEB"
+    (web_base / "config").mkdir(parents=True)
+    (web_base / "config" / "config.xml").write_text("<config/>")
+    web_dir = web_base / "applications" / "peoplesoft"
+    web_dir.mkdir(parents=True)
+    (web_dir / "configuration.properties").write_text(SAMPLE_CONFIGURATION_PROPERTIES)
 
-    # PIA domain (DPK layout) — config.properties under PORTAL.war
-    dpk_base = cfg_home / "webserv" / "DPKPIA"
+    # web domain (DPK layout) — config.properties under PORTAL.war
+    dpk_base = cfg_home / "webserv" / "DPKWEB"
     (dpk_base / "config").mkdir(parents=True)
     (dpk_base / "config" / "config.xml").write_text("<config/>")
     dpk_props = dpk_base / "applications" / "peoplesoft" / "PORTAL.war" / "WEB-INF" / "psftdocs" / "ps"
@@ -113,7 +128,6 @@ def base_config(tmp_path, config_file):
     """Return a PsaConfig with temporary paths, saved to disk."""
     config = PsaConfig()
     config.ps_base = tmp_path / "psoft"
-    config.io_base = tmp_path / "io"
     config.save(config_file)
     return config
 
@@ -130,15 +144,15 @@ def dpk_tree(tmp_path):
 
 @pytest.fixture
 def kit_source(tmp_path):
-    """Create a fake psa-kit source tree with io_* modules."""
+    """Create a fake psa-kit source tree with io_* modules (used by hidden `psa kit` tests)."""
     kit = tmp_path / "psa-kit"
     modules = kit / "dpk" / "puppet" / "production" / "modules"
     for name in ["io_profile", "io_role", "io_tools"]:
         mod_dir = modules / name
         mod_dir.mkdir(parents=True)
         (mod_dir / "init.pp").write_text(f"# {name}\n")
-    # Also create data dir
     data = kit / "dpk" / "puppet" / "production" / "data" / "psa-ops"
     data.mkdir(parents=True)
     (data / "common.yaml").write_text("---\n# psa-ops defaults\n")
     return kit
+

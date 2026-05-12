@@ -77,6 +77,7 @@ class PsadminExecutor:
         args: list[str],
         ps_cfg_home: Optional[Path] = None,
         timeout: int = 300,
+        stdin_input: Optional[str] = None,
     ) -> PsadminResult:
         """Run a psadmin command.
 
@@ -84,6 +85,8 @@ class PsadminExecutor:
             args: Arguments to pass to psadmin (e.g., ["-c", "sstatus", "-d", "APPDOM"])
             ps_cfg_home: Optional PS_CFG_HOME override
             timeout: Command timeout in seconds
+            stdin_input: Optional string fed to the process stdin (for interactive
+                psadmin actions like ``delete`` that prompt for Y/N).
 
         Returns:
             PsadminResult with success status, exit code, and output
@@ -97,6 +100,7 @@ class PsadminExecutor:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                input=stdin_input,
             )
             return PsadminResult(
                 success=result.returncode == 0,
@@ -173,6 +177,10 @@ class PsadminExecutor:
         """Flush appserver domain IPC."""
         return self.run(["-c", "cleanipc", "-d", domain], ps_cfg_home)
 
+    def app_delete(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
+        """Delete appserver domain config via psadmin (interactive: pipes 'y')."""
+        return self.run(["-c", "delete", "-d", domain], ps_cfg_home, stdin_input="y\ny\n")
+
     # Process scheduler domain commands
     def prcs_status(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
         """Get process scheduler domain status."""
@@ -197,6 +205,10 @@ class PsadminExecutor:
     def prcs_flush(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
         """Flush process scheduler domain IPC."""
         return self.run(["-p", "cleanipc", "-d", domain], ps_cfg_home)
+
+    def prcs_delete(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
+        """Delete process scheduler domain config via psadmin (interactive: pipes 'y')."""
+        return self.run(["-p", "delete", "-d", domain], ps_cfg_home, stdin_input="y\ny\n")
 
     def prcs_purge(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
         """Purge process scheduler domain cache."""
@@ -229,18 +241,12 @@ class PsadminExecutor:
         return self.run(["-w", "status", "-d", domain], ps_cfg_home)
 
     def web_start(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
-        """Start web server domain."""
-        # Use startPIA.sh script
-        cfg_home = ps_cfg_home or self.config.get_ps_cfg_home()
-        script = cfg_home / "webserv" / domain / "bin" / "startPIA.sh"
-        return self._run_web_script(script, domain)
+        """Start web server domain via psadmin -w start."""
+        return self.run(["-w", "start", "-d", domain], ps_cfg_home)
 
     def web_stop(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
-        """Stop web server domain."""
-        # Use stopPIA.sh script
-        cfg_home = ps_cfg_home or self.config.get_ps_cfg_home()
-        script = cfg_home / "webserv" / domain / "bin" / "stopPIA.sh"
-        return self._run_web_script(script, domain)
+        """Stop web server domain via psadmin -w shutdown."""
+        return self.run(["-w", "shutdown", "-d", domain], ps_cfg_home)
 
     def web_kill(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
         """Force stop web server domain."""
@@ -267,6 +273,10 @@ class PsadminExecutor:
                 command=cmd,
             )
 
+    def web_delete(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
+        """Delete web (PIA) domain config via psadmin (interactive: pipes 'y')."""
+        return self.run(["-w", "delete", "-d", domain], ps_cfg_home, stdin_input="y\ny\n")
+
     def web_purge(self, domain: str, ps_cfg_home: Optional[Path] = None) -> PsadminResult:
         """Purge web server domain cache."""
         cfg_home = ps_cfg_home or self.config.get_ps_cfg_home()
@@ -292,46 +302,3 @@ class PsadminExecutor:
                 command=shell_cmd,
             )
 
-    def _run_web_script(self, script: Path, domain: str) -> PsadminResult:
-        """Run a web server script (startPIA.sh or stopPIA.sh)."""
-        # Check existence via sudo when needed (webserv/ may be 750)
-        if not self._is_runtime_user() and self.config.sudo_enabled:
-            check = subprocess.run(
-                ["sudo", "su", "-", self.config.runtime_user, "-c", f"test -e {script}"],
-                capture_output=True, timeout=10,
-            )
-            script_exists = check.returncode == 0
-        else:
-            script_exists = script.exists()
-        if not script_exists:
-            return PsadminResult(
-                success=False,
-                exit_code=1,
-                output=f"Script not found: {script}",
-                command=str(script),
-            )
-
-        cmd = [str(script)]
-        if not self._is_runtime_user() and self.config.sudo_enabled:
-            cmd = ["sudo", "su", "-", self.config.runtime_user, "-c", str(script)]
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            return PsadminResult(
-                success=result.returncode == 0,
-                exit_code=result.returncode,
-                output=result.stdout + result.stderr,
-                command=" ".join(cmd),
-            )
-        except Exception as e:
-            return PsadminResult(
-                success=False,
-                exit_code=1,
-                output=str(e),
-                command=" ".join(cmd),
-            )

@@ -70,35 +70,35 @@ class TestDiscoverPrcsDomains:
         assert cfg["prcs_server_name"] == "PSUNX"
 
 
-class TestDiscoverPiaDomains:
-    """Test PIA domain discovery."""
+class TestDiscoverWebDomains:
+    """Test web (PIA) domain discovery."""
 
-    def test_discovers_pia_domains(self, mock_config, tmp_cfg_home):
+    def test_discovers_web_domains(self, mock_config, tmp_cfg_home):
         discovery = DomainDiscovery(mock_config)
-        domains = discovery.discover_pia_domains()
+        domains = discovery.discover_web_domains()
 
         names = {d.name for d in domains}
-        assert names == {"TESTPIA", "DPKPIA"}
+        assert names == {"TESTWEB", "DPKWEB"}
         for dom in domains:
-            assert dom.domain_type == "pia"
+            assert dom.domain_type == "web"
 
-    def test_flat_pia_config_values(self, mock_config, tmp_cfg_home):
+    def test_flat_web_config_values(self, mock_config, tmp_cfg_home):
         discovery = DomainDiscovery(mock_config)
-        domains = discovery.discover_pia_domains()
-        dom = [d for d in domains if d.name == "TESTPIA"][0]
+        domains = discovery.discover_web_domains()
+        dom = [d for d in domains if d.name == "TESTWEB"][0]
 
-        assert dom.path == tmp_cfg_home / "webserv" / "TESTPIA"
+        assert dom.path == tmp_cfg_home / "webserv" / "TESTWEB"
         assert dom.config["app_server"] == "APPDOM"
         assert dom.config["jolt_port"] == "9100"
         assert dom.config["web_profile"] == "HCM"
 
-    def test_dpk_pia_config_values(self, mock_config, tmp_cfg_home):
+    def test_dpk_web_config_values(self, mock_config, tmp_cfg_home):
         """DPK layout: properties found under PORTAL.war/WEB-INF/psftdocs/*/."""
         discovery = DomainDiscovery(mock_config)
-        domains = discovery.discover_pia_domains()
-        dom = [d for d in domains if d.name == "DPKPIA"][0]
+        domains = discovery.discover_web_domains()
+        dom = [d for d in domains if d.name == "DPKWEB"][0]
 
-        assert dom.path == tmp_cfg_home / "webserv" / "DPKPIA"
+        assert dom.path == tmp_cfg_home / "webserv" / "DPKWEB"
         assert dom.config["app_server"] == "APPDOM"
         assert dom.config["jolt_port"] == "9100"
         assert len(dom.config_files) == 1
@@ -112,14 +112,14 @@ class TestDiscoverAll:
         domains = discovery.discover_all()
 
         types = {d.domain_type for d in domains}
-        assert types == {"app", "prcs", "pia"}
+        assert types == {"app", "prcs", "web"}
         assert len(domains) == 4
 
     def test_returns_correct_names(self, mock_config):
         discovery = DomainDiscovery(mock_config)
         domains = discovery.discover_all()
         names = {d.name for d in domains}
-        assert names == {"TESTDOM", "TESTPRCS", "TESTPIA", "DPKPIA"}
+        assert names == {"TESTDOM", "TESTPRCS", "TESTWEB", "DPKWEB"}
 
 
 class TestRawConfigCapture:
@@ -146,10 +146,10 @@ class TestRawConfigCapture:
         assert raw["type"] == "psprcs.cfg"
         assert "PrcsServerName=PSUNX" in raw["content"]
 
-    def test_pia_config_file_captured(self, mock_config):
+    def test_web_config_file_captured(self, mock_config):
         discovery = DomainDiscovery(mock_config)
-        domains = discovery.discover_pia_domains()
-        dom = [d for d in domains if d.name == "TESTPIA"][0]
+        domains = discovery.discover_web_domains()
+        dom = [d for d in domains if d.name == "TESTWEB"][0]
 
         assert len(dom.config_files) == 1
         raw = dom.config_files[0]
@@ -190,7 +190,7 @@ class TestEmptyCfgHome:
         (tmp_path / "webserv").mkdir()
         config = PsaConfig(ps_cfg_home=tmp_path, ops=OpsConfig(), sudo_enabled=False)
         discovery = DomainDiscovery(config)
-        assert discovery.discover_pia_domains() == []
+        assert discovery.discover_web_domains() == []
 
 
 class TestDomainInfoToDict:

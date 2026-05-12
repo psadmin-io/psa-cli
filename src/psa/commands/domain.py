@@ -7,7 +7,7 @@ from typing import List, Optional, Set
 import typer
 from rich.table import Table
 
-from psa.core.api import ApiClient, ApiError
+from psa.core.api import ApiClient, ApiError, get_hostname
 from psa.core.compare import (
     CompareResult,
     diff_configs,
@@ -16,12 +16,12 @@ from psa.core.compare import (
     get_primary_config,
     list_archive_backups,
     parse_config_to_flat,
-    resolve_pia_config_path,
+    resolve_web_config_path,
 )
-from psa.core.config import get_config
+from psa.core.config import PsaConfig, get_config
 from psa.core.discovery import run_discovery
 from psa.core.domain import DomainDiscovery, DomainInfo
-from psa.core.domain_cache import get_cached_domain_id
+from psa.core.domain_cache import get_cached_domain_id, update_cache_from_ingest
 from psa.core.fileops import SudoFileOps
 from psa.core.output import (
     Verbosity,
@@ -139,6 +139,7 @@ def _execute_domain_command(
             "configure": executor.app_configure,
             "purge": executor.app_purge,
             "flush": executor.app_flush,
+            "delete": executor.app_delete,
         },
         "prcs": {
             "status": executor.prcs_status,
@@ -148,13 +149,15 @@ def _execute_domain_command(
             "configure": executor.prcs_configure,
             "purge": executor.prcs_purge,
             "flush": executor.prcs_flush,
+            "delete": executor.prcs_delete,
         },
-        "pia": {
+        "web": {
             "status": executor.web_status,
             "start": executor.web_start,
             "stop": executor.web_stop,
             "kill": executor.web_kill,
             "purge": executor.web_purge,
+            "delete": executor.web_delete,
         },
     }
 
@@ -215,11 +218,12 @@ def _parse_status_output(output: str, domain_type: str) -> str:
         # tmadmin process table — BBL present means Tuxedo domain is booted
         if "bbl" in output_lower and "prog name" in output_lower:
             return "running"
-    elif domain_type == "pia":
-        if "running" in output_lower and "not running" not in output_lower:
-            return "running"
-        if "stopped" in output_lower or "not running" in output_lower:
+    elif domain_type == "web":
+        # Stopped patterns first ("not started" must precede "started" check)
+        if "not started" in output_lower or "stopped" in output_lower or "not running" in output_lower:
             return "stopped"
+        if "started" in output_lower or "running" in output_lower:
+            return "running"
 
     return "unknown"
 
@@ -276,7 +280,7 @@ def bounce(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia)",
+        help="Domain type (app, prcs, web)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
@@ -316,7 +320,7 @@ def bounce(
             warn_if=lambda r: _is_already_purged(r),
         )
 
-        if domain.domain_type != "pia":
+        if domain.domain_type != "web":
             run_step("Flushing IPC", lambda d=domain: _execute_domain_command(d, "flush", executor))
             run_step("Configuring", lambda d=domain: _execute_domain_command(d, "configure", executor))
 
@@ -355,13 +359,13 @@ def configure(
     Examples:
         psa domain configure APPDOM
         psa domain configure APPDOM --restart   # stop, configure, start
-        psa domain configure              # configure all (skips PIA)
+        psa domain configure              # configure all (skips web)
         psa domain configure --type app   # configure all app domains
     """
     _apply_verbosity(quiet, verbose)
-    domains = _resolve_targets(name, domain_type, skip_types={"pia"} if name is None else None)
-    if name is not None and domains[0].domain_type == "pia":
-        print_error("Configure not supported for PIA domains")
+    domains = _resolve_targets(name, domain_type, skip_types={"web"} if name is None else None)
+    if name is not None and domains[0].domain_type == "web":
+        print_error("Configure not supported for web domains")
         raise typer.Exit(1)
     if not _confirm_targets(domains, "configure", all_mode=name is None, force=force):
         raise typer.Abort()
@@ -418,10 +422,10 @@ def _resolve_api_domain_id(client: ApiClient, name: str) -> str:
 
 def _resolve_config_path(domain: DomainInfo, config_name: str, fileops: SudoFileOps) -> Path:
     """Resolve the live config file path for a domain."""
-    if domain.domain_type == "pia":
-        path = resolve_pia_config_path(fileops, domain.path)
+    if domain.domain_type == "web":
+        path = resolve_web_config_path(fileops, domain.path)
         if not path:
-            print_error(f"Cannot find configuration.properties for PIA domain '{domain.name}'")
+            print_error(f"Cannot find configuration.properties for web domain '{domain.name}'")
             raise typer.Exit(1)
         return path
     return domain.path / config_name
@@ -458,13 +462,170 @@ def _render_compare_table(
     console.print(table)
 
 
+def _compare_domain_ops(
+    domain: DomainInfo,
+    config: PsaConfig,
+    commit: bool,
+    json_output: bool,
+    config_type: Optional[str] = None,
+) -> bool:
+    """Compare a single domain against its Ops baseline and optionally commit.
+
+    Returns True on success, False on failure.
+    """
+    name = domain.name
+    config_name = config_type or get_primary_config(domain.domain_type)
+
+    # Read current local config
+    fileops = SudoFileOps(config)
+    config_path = _resolve_config_path(domain, config_name, fileops)
+    current_content = fileops.read_text(config_path)
+    if current_content is None:
+        print_error(f"Cannot read {config_path}")
+        return False
+
+    current_flat = parse_config_to_flat(current_content, config_name)
+
+    # Fetch Ops baseline
+    client = ApiClient(config.ops.url)
+    domain_id = _resolve_api_domain_id(client, name)
+
+    # Push current config so API always has live server state
+    if domain.config_files:
+        try:
+            client.push_current_config(domain_id, domain.config_files)
+        except Exception as e:
+            print_warning(f"Failed to push current config for {name}: {e}")
+
+    try:
+        api_config = client.get_latest_config(domain_id, config_name)
+    except ApiError as e:
+        print_error(f"API error for {name}: {e}")
+        return False
+
+    # Determine diff
+    if api_config:
+        parsed_content = api_config.get("parsed_content")
+        if not parsed_content:
+            print_error(f"No parsed content in API config for '{name}'")
+            return False
+        old_flat = extract_api_properties(parsed_content, config_name)
+        changes = diff_configs(old_flat, current_flat)
+    else:
+        # No baseline exists
+        old_flat = None
+        changes = None
+
+    # -- Commit flow --
+    if changes is not None and len(changes) == 0:
+        # No drift
+        if json_output:
+            data = {
+                "domain": name,
+                "config_type": config_name,
+                "has_drift": False,
+                "committed": False,
+                "changes": [],
+            }
+            console.print_json(json.dumps(data, default=str))
+        else:
+            print_info(f"{name}: config matches Ops baseline.")
+        return True
+
+    if old_flat is None:
+        # No baseline in Ops
+        if json_output:
+            auto = True
+        elif commit:
+            auto = True
+        else:
+            print_info(f"{name}: no baseline in Ops ({config_name}, {len(current_flat)} keys)")
+            auto = typer.confirm("Commit current config as baseline?", default=False)
+
+        if not auto:
+            return True  # user declined, not a failure
+    else:
+        # Changes detected -- show diff
+        if not json_output:
+            _render_compare_table(name, config_name, changes, "OPS Capture", "Current")
+
+        if json_output:
+            auto = True
+        elif commit:
+            auto = True
+        else:
+            auto = typer.confirm("Commit to Ops?", default=False)
+
+        if not auto:
+            if json_output:
+                data = {
+                    "domain": name,
+                    "config_type": config_name,
+                    "has_drift": True,
+                    "committed": False,
+                    "changes": [
+                        {
+                            "key": c.key,
+                            "old_value": c.old_value,
+                            "new_value": c.new_value,
+                            "change_type": c.change_type,
+                        }
+                        for c in changes
+                    ],
+                }
+                console.print_json(json.dumps(data, default=str))
+            return True
+
+    # Push via ingest
+    try:
+        hostname = get_hostname()
+        domain_dicts = [domain.to_dict()]
+        environment_id = config.ops.environment_id
+        result = client.ingest_scan(
+            hostname=hostname,
+            domains=domain_dicts,
+            environment_id=environment_id,
+        )
+        if result.get("domains"):
+            update_cache_from_ingest(result)
+
+        if json_output:
+            data = {
+                "domain": name,
+                "config_type": config_name,
+                "has_drift": changes is not None and len(changes) > 0,
+                "committed": True,
+                "changes": [
+                    {
+                        "key": c.key,
+                        "old_value": c.old_value,
+                        "new_value": c.new_value,
+                        "change_type": c.change_type,
+                    }
+                    for c in (changes or [])
+                ],
+            }
+            console.print_json(json.dumps(data, default=str))
+        else:
+            print_success(f"Committed {name} config to Ops")
+        return True
+    except ApiError as e:
+        print_error(f"Commit failed for {name}: {e}")
+        return False
+
+
 @app.command("compare")
 def compare(
-    name: str = typer.Argument(..., help="Domain name"),
+    name: Optional[str] = typer.Argument(None, help="Domain name (omit for all)"),
     ops: bool = typer.Option(
         False,
         "--ops",
         help="Compare current local config vs last PSA-OPS capture",
+    ),
+    commit: bool = typer.Option(
+        False,
+        "--commit",
+        help="Push changes to Ops without prompting",
     ),
     file: Optional[str] = typer.Option(
         None,
@@ -504,6 +665,8 @@ def compare(
         psa domain compare APPDOM
         psa domain compare APPDOM --latest
         psa domain compare APPDOM --ops
+        psa domain compare --ops              # all domains vs Ops
+        psa domain compare --ops --commit     # commit all without prompting
         psa domain compare APPDOM --file /path/to/old.cfg
         psa domain compare APPDOM --type psappsrv.cfg
         psa domain compare APPDOM --json
@@ -514,6 +677,31 @@ def compare(
     exclusive_count = sum([latest, ops, file is not None])
     if exclusive_count > 1:
         print_error("--latest, --ops, and --file are mutually exclusive")
+        raise typer.Exit(1)
+
+    # --ops mode: supports optional name (all domains when omitted)
+    if ops:
+        config = get_config()
+        if not config.ops.is_configured():
+            print_error("PSA-OPS not configured. Run 'psa ops setup --url <url>' first")
+            raise typer.Exit(1)
+
+        domains = _resolve_targets(name)
+        for domain in domains:
+            ok = _compare_domain_ops(
+                domain,
+                config,
+                commit=commit or json_output,
+                json_output=json_output,
+                config_type=config_type,
+            )
+            if not ok:
+                raise typer.Exit(1)
+        return
+
+    # Non-ops modes require a domain name
+    if name is None:
+        print_error("Domain name required for archive/file compare. Use --ops for all domains.")
         raise typer.Exit(1)
 
     # 1. Find domain locally
@@ -538,35 +726,7 @@ def compare(
     current_flat = parse_config_to_flat(current_content, config_name)
 
     # 4. Get comparison target
-    if ops:
-        # Compare vs last API capture
-        if not config.ops.is_configured():
-            print_error("PSA-OPS not configured. Run 'psa ops setup --url <url>' first")
-            raise typer.Exit(1)
-
-        client = ApiClient(config.ops.url)
-        domain_id = _resolve_api_domain_id(client, name)
-
-        try:
-            api_config = client.get_latest_config(domain_id, config_name)
-        except ApiError as e:
-            print_error(f"API error: {e}")
-            raise typer.Exit(1)
-
-        if not api_config:
-            print_error(f"No captured config for '{name}' ({config_name}) in PSA-OPS")
-            raise typer.Exit(1)
-
-        parsed_content = api_config.get("parsed_content")
-        if not parsed_content:
-            print_error(f"No parsed content in API config for '{name}'")
-            raise typer.Exit(1)
-
-        old_flat = extract_api_properties(parsed_content, config_name)
-        left_label = "OPS Capture"
-        right_label = "Current"
-
-    elif file:
+    if file:
         # Compare vs arbitrary file
         file_path = Path(file)
         file_content = fileops.read_text(file_path)
@@ -580,8 +740,8 @@ def compare(
 
     else:
         # Default: compare vs Archive backup
-        if domain.domain_type == "pia":
-            print_error("Archive comparison not supported for PIA domains. Use --ops or --file instead")
+        if domain.domain_type == "web":
+            print_error("Archive comparison not supported for web domains. Use --ops or --file instead")
             raise typer.Exit(1)
 
         archive_path = domain.path / "Archive"
@@ -662,13 +822,13 @@ def flush(
 
     Examples:
         psa domain flush APPDOM
-        psa domain flush              # flush all (skips PIA)
+        psa domain flush              # flush all (skips web)
         psa domain flush --type app   # flush all app domains
     """
     _apply_verbosity(quiet, verbose)
-    domains = _resolve_targets(name, domain_type, skip_types={"pia"} if name is None else None)
-    if name is not None and domains[0].domain_type == "pia":
-        print_warning("Flush not applicable for PIA domains")
+    domains = _resolve_targets(name, domain_type, skip_types={"web"} if name is None else None)
+    if name is not None and domains[0].domain_type == "web":
+        print_warning("Flush not applicable for web domains")
         return
     if not _confirm_targets(domains, "flush", all_mode=name is None, force=force):
         raise typer.Abort()
@@ -698,7 +858,7 @@ def kill(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia)",
+        help="Domain type (app, prcs, web)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
@@ -747,7 +907,7 @@ def list_domains(
         None,
         "--type",
         "-t",
-        help="Filter by domain type (app, prcs, pia)",
+        help="Filter by domain type (app, prcs, web)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -812,7 +972,7 @@ def purge(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia)",
+        help="Domain type (app, prcs, web)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
@@ -868,7 +1028,7 @@ def restart(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia)",
+        help="Domain type (app, prcs, web)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
@@ -929,7 +1089,7 @@ def start(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia)",
+        help="Domain type (app, prcs, web)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
@@ -989,7 +1149,7 @@ def status(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia) - auto-detected if not specified",
+        help="Domain type (app, prcs, web) - auto-detected if not specified",
     ),
     report: bool = typer.Option(
         False,
@@ -1080,7 +1240,7 @@ def stop(
         None,
         "--type",
         "-t",
-        help="Domain type (app, prcs, pia)",
+        help="Domain type (app, prcs, web)",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),

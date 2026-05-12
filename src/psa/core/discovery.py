@@ -27,11 +27,11 @@ def run_discovery(
                 return discovery.discover_appserver_domains()
             elif domain_type == "prcs":
                 return discovery.discover_prcs_domains()
-            elif domain_type == "pia":
-                return discovery.discover_pia_domains()
+            elif domain_type == "web":
+                return discovery.discover_web_domains()
             else:
                 print_error(f"Unknown domain type: {domain_type}")
-                print_error("Valid types: app, prcs, pia")
+                print_error("Valid types: app, prcs, web")
                 raise typer.Exit(1)
         else:
             return discovery.discover_all()

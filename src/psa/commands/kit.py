@@ -9,7 +9,7 @@ import typer
 from rich.console import Console
 
 from psa.core.config import (
-    DEFAULT_PSA_CUST,
+    DEFAULT_DPK_CUST_HOME,
     DEFAULT_PSA_KIT,
     PsaConfig,
     get_config,
@@ -40,101 +40,22 @@ def _resolve_kit_path(dest: Optional[Path] = None) -> Path:
     return Path(DEFAULT_PSA_KIT)
 
 
-def _resolve_cust_path(cust: Optional[Path] = None) -> Path:
-    """Resolve cust path: --cust -> $PSA_CUST -> config -> DEFAULT_PSA_CUST."""
+def _resolve_dpk_cust_home(cust: Optional[Path] = None) -> Path:
+    """Resolve DPK_CUST_HOME: --cust -> $DPK_CUST_HOME -> config -> DEFAULT_DPK_CUST_HOME."""
     if cust:
         return cust.resolve()
-    if psa_cust := os.environ.get("PSA_CUST"):
-        return Path(psa_cust)
+    if dpk_cust := os.environ.get("DPK_CUST_HOME"):
+        return Path(dpk_cust)
     config = get_config()
-    if config.psa_cust_path:
-        return config.psa_cust_path
-    return Path(DEFAULT_PSA_CUST)
+    if config.dpk_cust_home:
+        return config.dpk_cust_home
+    return Path(DEFAULT_DPK_CUST_HOME)
 
 
-def _scaffold_psa_cust(cust_path: Path) -> None:
-    """Scaffold PSA_CUST directory structure."""
-    data_base = cust_path / "dpk" / "puppet" / "production" / "data"
-    modules_dir = cust_path / "dpk" / "puppet" / "production" / "modules"
-
-    subdirs = ["tier", "env", "server", "domain", "zone"]
-
-    # Create directories
-    for subdir in subdirs:
-        (data_base / subdir).mkdir(parents=True, exist_ok=True)
-    modules_dir.mkdir(parents=True, exist_ok=True)
-
-    # Root README
-    readme = cust_path / "README.md"
-    if not readme.exists():
-        readme.write_text(
-            "# PSA Customizations\n\n"
-            "Customer-specific DPK customizations for this environment.\n"
-            "See dpk/puppet/production/data/ for Hiera data layers.\n"
-        )
-
-    # Data README
-    data_readme = data_base / "README.md"
-    if not data_readme.exists():
-        data_readme.write_text(
-            "# Hiera Data\n\n"
-            "Customer customization layers (highest to lowest priority):\n"
-            "- domain/ — Per-domain overrides\n"
-            "- server/ — Per-server overrides\n"
-            "- env/ — Environment-level config\n"
-            "- tier/ — Tier-level config (DEV, TST, PRD)\n"
-            "- zone/ — Zone-role config\n"
-            "- common.yaml — Shared customizations\n"
-        )
-
-    # common.yaml example
-    common_example = data_base / "common.yaml.example"
-    if not common_example.exists():
-        common_example.write_text(
-            "---\n"
-            "# Common customizations applied to all nodes.\n"
-            "# Rename to common.yaml to activate.\n"
-            "#\n"
-            "# Example:\n"
-            "# io_profile::psft_setup::jdk_location: /u01/app/oracle/jdk\n"
-        )
-
-    # Subdir READMEs
-    for subdir in subdirs:
-        subdir_readme = data_base / subdir / "README.md"
-        if not subdir_readme.exists():
-            subdir_readme.write_text(
-                f"# {subdir.capitalize()} Layer\n\n"
-                f"Place {subdir}-specific YAML files here.\n"
-                f"File naming: <{subdir}_name>.yaml\n"
-            )
-
-    # Tier example
-    tier_example = data_base / "tier" / "DEV.yaml.example"
-    if not tier_example.exists():
-        tier_example.write_text(
-            "---\n"
-            "# Tier-level overrides for DEV tier.\n"
-            "# Rename to DEV.yaml to activate.\n"
-        )
-
-    # Env example
-    env_example = data_base / "env" / "FSCMDEV.yaml.example"
-    if not env_example.exists():
-        env_example.write_text(
-            "---\n"
-            "# Environment-level overrides for FSCMDEV.\n"
-            "# Rename to FSCMDEV.yaml to activate.\n"
-        )
-
-    # Modules README
-    modules_readme = modules_dir / "README.md"
-    if not modules_readme.exists():
-        modules_readme.write_text(
-            "# Custom Puppet Modules\n\n"
-            "Place customer-specific Puppet modules here.\n"
-            "These take precedence over kit and DPK modules.\n"
-        )
+def _scaffold_dpk_cust_home(cust_path: Path) -> None:
+    """Scaffold DPK_CUST_HOME (flat layout). Delegates to shared helper."""
+    from psa.commands.dpk.init import scaffold_dpk_cust_home
+    scaffold_dpk_cust_home(cust_path)
 
 
 @app.command("install")
@@ -166,11 +87,11 @@ def kit_install(
     cust: Optional[Path] = typer.Option(
         None,
         "--cust",
-        help=f"PSA_CUST location (or $PSA_CUST, default: {DEFAULT_PSA_CUST})",
+        help=f"DPK_CUST_HOME location (or $DPK_CUST_HOME, default: {DEFAULT_DPK_CUST_HOME})",
     ),
 ) -> None:
     """
-    Install PSA Kit and scaffold PSA_CUST directory.
+    Install PSA Kit and scaffold DPK_CUST_HOME directory.
 
     Clones the psa-kit repo (or extracts a zip) and creates the customer
     customization directory structure.
@@ -179,10 +100,10 @@ def kit_install(
         psa kit install
         psa kit install --branch v1.0.0
         psa kit install --source file --path /tmp/psa-kit.zip
-        psa kit install --dest /opt/psa-kit --cust /opt/psa-cust
+        psa kit install --dest /opt/psa-kit --cust /opt/dpk-cust
     """
     resolved_dest = _resolve_kit_path(dest)
-    resolved_cust = _resolve_cust_path(cust)
+    resolved_cust = _resolve_dpk_cust_home(cust)
 
     # Check if dest is non-empty
     if resolved_dest.exists() and any(resolved_dest.iterdir()):
@@ -191,7 +112,7 @@ def kit_install(
         raise typer.Exit(1)
 
     print_info(f"Kit destination: {resolved_dest}")
-    print_info(f"Cust location: {resolved_cust}")
+    print_info(f"DPK_CUST_HOME location: {resolved_cust}")
 
     if source == "git":
         # Try SSH first (private repo), fall back to HTTPS
@@ -259,20 +180,20 @@ def kit_install(
     config.psa_kit_path = resolved_dest
     config.save()
 
-    # Scaffold PSA_CUST
+    # Scaffold DPK_CUST_HOME
     if resolved_cust.exists() and any(resolved_cust.iterdir()):
-        print_warning(f"PSA_CUST already has files, skipping scaffold: {resolved_cust}")
+        print_warning(f"DPK_CUST_HOME already has files, skipping scaffold: {resolved_cust}")
     else:
-        print_info("Scaffolding PSA_CUST...")
-        _scaffold_psa_cust(resolved_cust)
-        print_success(f"PSA_CUST scaffolded at {resolved_cust}")
+        print_info("Scaffolding DPK_CUST_HOME...")
+        _scaffold_dpk_cust_home(resolved_cust)
+        print_success(f"DPK_CUST_HOME scaffolded at {resolved_cust}")
 
     # Save cust path to config
-    config.psa_cust_path = resolved_cust
+    config.dpk_cust_home = resolved_cust
     config.save()
 
     print_success("Kit installation complete")
-    print_info("Next: psa dpk sync --dpk-path <path>")
+    print_info("Next: psa dpk sync --dpk-home <path>")
 
 
 @app.command("update")
@@ -294,7 +215,7 @@ def kit_update(
     Update PSA Kit to latest version.
 
     For git-managed installs, runs git pull. For file-based installs,
-    requires --path to a new zip file. Does NOT touch PSA_CUST.
+    requires --path to a new zip file. Does NOT touch DPK_CUST_HOME.
 
     Examples:
         psa kit update
@@ -372,7 +293,7 @@ def kit_status(
     """
     resolved_dest = _resolve_kit_path(dest)
     config = get_config()
-    resolved_cust = config.psa_cust_path or Path(DEFAULT_PSA_CUST)
+    resolved_cust = config.dpk_cust_home or Path(DEFAULT_DPK_CUST_HOME)
 
     console.print("[bold]PSA Kit Status[/bold]\n")
 
@@ -417,12 +338,12 @@ def kit_status(
     else:
         console.print("  Source: file")
 
-    # Cust path
-    console.print(f"  Cust path: [cyan]{resolved_cust}[/cyan]")
+    # DPK_CUST_HOME path
+    console.print(f"  DPK_CUST_HOME: [cyan]{resolved_cust}[/cyan]")
     if resolved_cust.exists():
-        console.print("  Cust exists: [green]yes[/green]")
+        console.print("  DPK_CUST_HOME exists: [green]yes[/green]")
     else:
-        console.print("  Cust exists: [yellow]no[/yellow]")
+        console.print("  DPK_CUST_HOME exists: [yellow]no[/yellow]")
 
     # List io_* modules
     modules_dir = resolved_dest / "dpk" / "puppet" / "production" / "modules"

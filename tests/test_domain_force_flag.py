@@ -26,8 +26,8 @@ def _make_domain(name, dtype="app"):
 
 APPDOM = _make_domain("APPDOM", "app")
 PRCSDOM = _make_domain("PRCSDOM", "prcs")
-PIADOM = _make_domain("TESTPIA", "pia")
-ALL_DOMAINS = [APPDOM, PRCSDOM, PIADOM]
+WEBDOM = _make_domain("TESTWEB", "web")
+ALL_DOMAINS = [APPDOM, PRCSDOM, WEBDOM]
 
 OK_RESULT = PsadminResult(success=True, exit_code=0, output="ok", command="test")
 

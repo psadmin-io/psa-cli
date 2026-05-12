@@ -183,3 +183,122 @@ class TestSudoMode:
         mock_run.return_value = MagicMock(returncode=1, stdout="")
         ops = self._make_ops(sudo_config)
         assert ops.stat_size(Path("/nope")) is None
+
+
+class TestWriteTextDirect:
+    """write_text without sudo writes via pathlib."""
+
+    def test_writes_file_when_sudo_disabled(self, direct_config, tmp_path):
+        ops = SudoFileOps(direct_config)
+        target = tmp_path / "sub" / "out.txt"
+        assert ops.write_text(target, "hello\n") is True
+        assert target.read_text() == "hello\n"
+
+    def test_creates_parent_dirs(self, direct_config, tmp_path):
+        ops = SudoFileOps(direct_config)
+        target = tmp_path / "a" / "b" / "c.txt"
+        assert ops.write_text(target, "x") is True
+        assert target.exists()
+
+
+class TestWriteTextAsRunner:
+    """When sudo needed and not as_root, elevate to runtime_user via su."""
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_uses_sudo_su_runtime_user(self, mock_run, sudo_config):
+        mock_run.return_value = MagicMock(returncode=0)
+        ops = SudoFileOps(sudo_config)
+        ok = ops.write_text(Path("/u01/cfg/file.cfg"), "content\n")
+        assert ok is True
+        cmd = mock_run.call_args[0][0]
+        assert cmd[:5] == ["sudo", "su", "-", "psadm2", "-c"]
+        # The shell command should include the path and a base64 pipe
+        inner = cmd[5]
+        assert "mkdir -p /u01/cfg" in inner
+        assert "base64 -d > /u01/cfg/file.cfg" in inner
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_returns_false_on_subprocess_failure(self, mock_run, sudo_config):
+        mock_run.return_value = MagicMock(returncode=1)
+        ops = SudoFileOps(sudo_config)
+        assert ops.write_text(Path("/u01/cfg/file.cfg"), "x") is False
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_last_error_set_on_sudo_failure(self, mock_run, sudo_config):
+        """When sudo write fails, last_error captures stderr + exit code for diagnostics."""
+        mock_run.return_value = MagicMock(returncode=1, stderr="Permission denied\n")
+        ops = SudoFileOps(sudo_config)
+        assert ops.write_text(Path("/u01/cfg/file.cfg"), "x") is False
+        assert ops.last_error is not None
+        assert "exit 1" in ops.last_error
+        assert "Permission denied" in ops.last_error
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_last_error_set_on_timeout(self, mock_run, sudo_config):
+        """A timeout (typical for password prompt) sets a clear last_error."""
+        import subprocess
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd="sudo", timeout=30)
+        ops = SudoFileOps(sudo_config)
+        assert ops.write_text(Path("/u01/cfg/file.cfg"), "x") is False
+        assert ops.last_error is not None
+        assert "passwordless sudo" in ops.last_error
+
+    @patch.dict("os.environ", {"USER": "opc"})
+    @patch("psa.core.fileops.subprocess.run")
+    def test_last_error_cleared_on_success(self, mock_run, sudo_config):
+        """A subsequent successful write clears last_error."""
+        mock_run.return_value = MagicMock(returncode=1, stderr="boom\n")
+        ops = SudoFileOps(sudo_config)
+        ops.write_text(Path("/u01/cfg/a"), "x")
+        assert ops.last_error is not None
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        ops.write_text(Path("/u01/cfg/b"), "y")
+        assert ops.last_error is None
+
+
+class TestWriteTextAsRoot:
+    """as_root=True falls back to plain sudo bash when direct write fails."""
+
+    @patch("psa.core.fileops.subprocess.run")
+    def test_falls_back_to_sudo_bash_on_permission_error(self, mock_run, direct_config):
+        """When direct write fails (e.g., root-owned path), retry via sudo bash."""
+        mock_run.return_value = MagicMock(returncode=0)
+        ops = SudoFileOps(direct_config)
+        # /etc/facter/... is not writable by the test user — direct fails, sudo runs.
+        ok = ops.write_text(Path("/etc/facter/facts.d/server.yaml"), "ps_role: mid\n", as_root=True)
+        assert ok is True
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0:3] == ["sudo", "bash", "-c"]
+        inner = cmd[3]
+        assert "mkdir -p /etc/facter/facts.d" in inner
+        assert "base64 -d > /etc/facter/facts.d/server.yaml" in inner
+
+    @patch("psa.core.fileops.subprocess.run")
+    def test_skips_sudo_when_direct_succeeds(self, mock_run, direct_config, tmp_path):
+        """When direct write works (writable tmp path), don't invoke sudo."""
+        mock_run.return_value = MagicMock(returncode=0)
+        ops = SudoFileOps(direct_config)
+        target = tmp_path / "out.yaml"
+        ok = ops.write_text(target, "x", as_root=True)
+        assert ok is True
+        mock_run.assert_not_called()
+        assert target.read_text() == "x"
+
+    @patch("psa.core.fileops.subprocess.run")
+    def test_base64_encodes_content(self, mock_run, direct_config):
+        """Special chars in content survive via base64 over the sudo path."""
+        import base64
+        mock_run.return_value = MagicMock(returncode=0)
+        ops = SudoFileOps(direct_config)
+        # Use a path that direct-write can't touch so we hit the sudo branch.
+        content = "a: 'quote'\nb: \"double\"\n# comment with `backticks` and $vars\n"
+        ops.write_text(Path("/etc/facter/facts.d/x.yaml"), content, as_root=True)
+        inner = mock_run.call_args[0][0][3]
+        # Extract the base64 chunk between "echo " and " | base64 -d"
+        b64 = inner.split("echo ", 1)[1].split(" | ", 1)[0]
+        decoded = base64.b64decode(b64).decode("utf-8")
+        assert decoded == content

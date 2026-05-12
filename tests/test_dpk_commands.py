@@ -1,76 +1,41 @@
-"""Tests for DPK command changes (source path, hiera, modules, puppet.conf)."""
+"""Tests for DPK command changes (hiera, environment.conf, prereq, sync)."""
 
 import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import yaml
+from typer.testing import CliRunner
 
+from psa.commands.dpk import app as dpk_app
 from psa.commands.dpk.core import (
+    NCURSES_LIB_NAMES,
     _check_dpk_prerequisites,
+    _deploy_environment_conf,
     _deploy_hiera_files,
-    _deploy_module_files,
-    _deploy_puppet_conf,
+    _detect_os_major_version,
+    _generate_environment_conf,
     _generate_hiera_yaml,
-    _generate_puppet_conf,
-    _get_source_path,
+    _plan_ncurses_fix,
     _verify_puppet,
     DeployType,
 )
 from psa.core.config import PsaConfig
 
-
-# --- _get_source_path tests ---
-
-
-def test_get_source_path_returns_cli_arg(tmp_path):
-    """CLI --source arg takes priority."""
-    source = tmp_path / "my-source"
-    source.mkdir()
-    result = _get_source_path(source)
-    assert result == source.resolve()
-
-
-def test_get_source_path_uses_psa_kit_env(monkeypatch, tmp_path):
-    """PSA_KIT env var used when no CLI arg."""
-    kit = tmp_path / "kit"
-    monkeypatch.setenv("PSA_KIT", str(kit))
-    result = _get_source_path(None)
-    assert result == kit
-
-
-def test_get_source_path_falls_back_to_config(monkeypatch, tmp_path):
-    """Falls back to config.psa_kit_path when env not set."""
-    monkeypatch.delenv("PSA_KIT", raising=False)
-    config = PsaConfig()
-    config.psa_kit_path = tmp_path / "from-config"
-    with patch("psa.commands.dpk.core.get_config", return_value=config):
-        result = _get_source_path(None)
-    assert result == tmp_path / "from-config"
-
-
-def test_get_source_path_no_io_home(monkeypatch, tmp_path):
-    """IO_HOME is no longer checked."""
-    monkeypatch.delenv("PSA_KIT", raising=False)
-    monkeypatch.setenv("IO_HOME", str(tmp_path / "io-home"))
-    config = PsaConfig()
-    with patch("psa.commands.dpk.core.get_config", return_value=config):
-        result = _get_source_path(None)
-    # Should NOT return IO_HOME — falls through to package location
-    assert result != tmp_path / "io-home"
+runner = CliRunner()
 
 
 # --- _generate_hiera_yaml tests ---
 
 
 def test_generate_hiera_yaml_with_all_paths(tmp_path):
-    """Hiera YAML includes cust, kit, and DPK layers with correct paths."""
+    """Hiera YAML includes cust, kit, and DPK layers with correct paths (kit enabled)."""
     cust = tmp_path / "cust"
     kit = tmp_path / "kit"
-    result = _generate_hiera_yaml(cust, kit)
+    result = _generate_hiera_yaml(cust, kit, enable_psa_kit=True)
 
-    # Should contain cust datadir
-    cust_datadir = str(cust / "dpk" / "puppet" / "production" / "data")
+    # Should contain cust datadir (flat layout)
+    cust_datadir = str(cust / "data")
     assert cust_datadir in result
 
     # Should contain kit datadir
@@ -86,14 +51,25 @@ def test_generate_hiera_yaml_with_all_paths(tmp_path):
     assert "domain/%{facts.domainname}.yaml" in result
     assert "server/%{facts.hostname}.yaml" in result
     assert "tier/%{facts.ps_tier}.yaml" in result
+    assert "environment/%{facts.env}.yaml" in result
+    # Old env/ directory should not appear (renamed to environment/)
+    assert "env/%{facts.env}.yaml" not in result
 
-    # Kit layer
+    # Kit layer (only when enable_psa_kit=True)
     assert "psa-ops/common.yaml" in result
+
+
+def test_generate_hiera_yaml_kit_disabled_by_default(tmp_path):
+    """Default (enable_psa_kit=False) omits kit layer even when kit path is set."""
+    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit")
+    assert "psa-ops/common.yaml" not in result
+    # Cust layers still present
+    assert "domain/%{facts.domainname}.yaml" in result
 
 
 def test_generate_hiera_yaml_no_cust():
     """Hiera YAML without cust path skips cust layers."""
-    result = _generate_hiera_yaml(None, Path("/kit"))
+    result = _generate_hiera_yaml(None, Path("/kit"), enable_psa_kit=True)
     assert "domain/" not in result
     assert "server/" not in result
     # Kit layer still present
@@ -102,7 +78,7 @@ def test_generate_hiera_yaml_no_cust():
 
 def test_generate_hiera_yaml_no_kit():
     """Hiera YAML without kit path skips kit layer."""
-    result = _generate_hiera_yaml(Path("/cust"), None)
+    result = _generate_hiera_yaml(Path("/cust"), None, enable_psa_kit=True)
     assert "psa-ops/common.yaml" not in result
     # Cust layers still present
     assert "domain/%{facts.domainname}.yaml" in result
@@ -110,7 +86,7 @@ def test_generate_hiera_yaml_no_kit():
 
 def test_generate_hiera_yaml_is_valid_yaml(tmp_path):
     """Generated hiera.yaml is valid YAML."""
-    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit")
+    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit", enable_psa_kit=True)
     parsed = yaml.safe_load(result)
     assert parsed["version"] == 5
     assert "hierarchy" in parsed
@@ -119,7 +95,7 @@ def test_generate_hiera_yaml_is_valid_yaml(tmp_path):
 
 def test_generate_hiera_yaml_dpk_layers_no_datadir(tmp_path):
     """DPK base layers should not have datadir override."""
-    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit")
+    result = _generate_hiera_yaml(tmp_path / "cust", tmp_path / "kit", enable_psa_kit=True)
     # Parse and check DPK layers
     parsed = yaml.safe_load(result)
     dpk_names = [
@@ -146,7 +122,8 @@ def test_deploy_hiera_files_writes_to_puppet_dirs(dpk_tree, tmp_path):
     assert hiera_prod.exists()
 
     content = hiera_root.read_text()
-    assert str(cust / "dpk" / "puppet" / "production" / "data") in content
+    # Flat layout: cust datadir is <cust>/data
+    assert str(cust / "data") in content
 
 
 def test_deploy_hiera_files_dry_run(dpk_tree, tmp_path):
@@ -155,45 +132,18 @@ def test_deploy_hiera_files_dry_run(dpk_tree, tmp_path):
     assert not (dpk_tree / "puppet" / "hiera.yaml").exists()
 
 
-# --- _deploy_module_files tests ---
+# --- _generate_environment_conf tests ---
 
 
-def test_deploy_module_files_all_io_modules(dpk_tree, kit_source):
-    """All io_* modules from source are deployed."""
-    result = _deploy_module_files(dpk_tree, kit_source, dry_run=False)
-    assert result is True
-
-    modules_dir = dpk_tree / "puppet" / "production" / "modules"
-    deployed = sorted(d.name for d in modules_dir.iterdir() if d.is_dir())
-    assert "io_profile" in deployed
-    assert "io_role" in deployed
-    assert "io_tools" in deployed
-
-
-def test_deploy_module_files_backup_existing(dpk_tree, kit_source):
-    """Existing modules are backed up before overwrite."""
-    target = dpk_tree / "puppet" / "production" / "modules" / "io_role"
-    target.mkdir(parents=True, exist_ok=True)
-    (target / "old.pp").write_text("old content")
-
-    _deploy_module_files(dpk_tree, kit_source, dry_run=False)
-
-    backup = dpk_tree / "puppet" / "production" / "modules" / "io_role.bak"
-    assert backup.exists()
-    assert (backup / "old.pp").exists()
-
-
-# --- _generate_puppet_conf tests ---
-
-
-def test_generate_puppet_conf_all_paths(tmp_path):
-    """puppet.conf modulepath includes cust:kit:dpk."""
+def test_generate_environment_conf_all_paths(tmp_path):
+    """environment.conf modulepath includes cust:kit:dpk when enable_psa_kit=True."""
     cust = tmp_path / "cust"
     kit = tmp_path / "kit"
     dpk = tmp_path / "dpk"
-    result = _generate_puppet_conf(cust, kit, dpk)
+    result = _generate_environment_conf(cust, kit, dpk, enable_psa_kit=True)
 
-    cust_mod = str(cust / "dpk" / "puppet" / "production" / "modules")
+    # Flat layout: cust modules is <cust>/modules
+    cust_mod = str(cust / "modules")
     kit_mod = str(kit / "dpk" / "puppet" / "production" / "modules")
     dpk_mod = str(dpk / "puppet" / "production" / "modules")
 
@@ -205,90 +155,217 @@ def test_generate_puppet_conf_all_paths(tmp_path):
     assert result.index(cust_mod) < result.index(kit_mod)
     assert result.index(kit_mod) < result.index(dpk_mod)
 
+    # Required environment.conf keys
+    assert "modulepath" in result
+    assert "manifest = manifests/site.pp" in result
+    assert "environment_timeout" in result
 
-def test_generate_puppet_conf_no_cust(tmp_path):
-    """puppet.conf without cust only has kit:dpk."""
+
+def test_generate_environment_conf_kit_disabled_by_default(tmp_path):
+    """Default (enable_psa_kit=False) omits kit segment from modulepath."""
+    cust = tmp_path / "cust"
     kit = tmp_path / "kit"
     dpk = tmp_path / "dpk"
-    result = _generate_puppet_conf(None, kit, dpk)
+    result = _generate_environment_conf(cust, kit, dpk)
+
+    kit_mod = str(kit / "dpk" / "puppet" / "production" / "modules")
+    cust_mod = str(cust / "modules")
+    dpk_mod = str(dpk / "puppet" / "production" / "modules")
+    assert kit_mod not in result
+    assert cust_mod in result
+    assert dpk_mod in result
+
+
+def test_generate_environment_conf_no_cust(tmp_path):
+    """environment.conf without cust only has kit:dpk."""
+    kit = tmp_path / "kit"
+    dpk = tmp_path / "dpk"
+    result = _generate_environment_conf(None, kit, dpk, enable_psa_kit=True)
 
     kit_mod = str(kit / "dpk" / "puppet" / "production" / "modules")
     dpk_mod = str(dpk / "puppet" / "production" / "modules")
 
     assert kit_mod in result
     assert dpk_mod in result
-    assert "cust" not in result
 
 
-# --- _deploy_puppet_conf tests ---
+# --- _deploy_environment_conf tests ---
 
 
-def test_deploy_puppet_conf_writes_file(dpk_tree, tmp_path):
-    """puppet.conf is written to puppet/ directory."""
-    assert _deploy_puppet_conf(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=False)
-    target = dpk_tree / "puppet" / "puppet.conf"
+def test_deploy_environment_conf_writes_file(dpk_tree, tmp_path):
+    """environment.conf is written to puppet/production/."""
+    assert _deploy_environment_conf(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=False)
+    target = dpk_tree / "puppet" / "production" / "environment.conf"
     assert target.exists()
     content = target.read_text()
     assert "modulepath" in content
+    assert "manifest = manifests/site.pp" in content
 
 
-def test_deploy_puppet_conf_dry_run(dpk_tree, tmp_path):
-    """Dry run does not write puppet.conf."""
-    assert _deploy_puppet_conf(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=True)
-    assert not (dpk_tree / "puppet" / "puppet.conf").exists()
+def test_deploy_environment_conf_dry_run(dpk_tree, tmp_path):
+    """Dry run does not write environment.conf."""
+    assert _deploy_environment_conf(dpk_tree, tmp_path / "c", tmp_path / "k", dry_run=True)
+    assert not (dpk_tree / "puppet" / "production" / "environment.conf").exists()
 
 
 # --- _check_dpk_prerequisites tests ---
 
 
+def _touch_all_ncurses(libdir: Path) -> None:
+    """Create empty placeholder files for every required ncurses .5 lib."""
+    libdir.mkdir(parents=True, exist_ok=True)
+    for name in NCURSES_LIB_NAMES:
+        (libdir / name).touch()
+
+
+def _touch_all_ncurses_six(libdir: Path) -> None:
+    """Create the corresponding .6 libs (so EL 9 symlinks have a target)."""
+    libdir.mkdir(parents=True, exist_ok=True)
+    for name in NCURSES_LIB_NAMES:
+        (libdir / name.replace(".so.5", ".so.6")).touch()
+
+
 def test_prereq_ok_when_libs_exist(tmp_path):
-    """No error when all required libs exist."""
-    lib = tmp_path / "libncursesw.so.5"
-    lib.touch()
-    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", [str(lib)]):
+    """No error when all required ncurses .5 libs exist."""
+    _touch_all_ncurses(tmp_path)
+    with patch("psa.commands.dpk.core.LIB_SEARCH_DIRS", [str(tmp_path)]):
         with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
-            # Should not raise
             _check_dpk_prerequisites(DeployType.tools_home)
 
 
-def test_prereq_fix_runs_dnf(tmp_path):
-    """--fix auto-installs missing packages via dnf."""
-    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", ["/nonexistent/lib.so"]):
+def test_prereq_el8_fix_installs_compat_pkg(tmp_path):
+    """EL 8: --fix installs ncurses-compat-libs (one shot for all .5 libs)."""
+    with patch("psa.commands.dpk.core.LIB_SEARCH_DIRS", [str(tmp_path)]):
         with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
-            mock_run = MagicMock(return_value=MagicMock(returncode=0))
-            with patch("psa.commands.dpk.core.subprocess.run", mock_run):
-                with patch("os.geteuid", return_value=1000):
-                    _check_dpk_prerequisites(DeployType.tools_home, fix=True)
-            # Should have called sudo dnf install
+            with patch("psa.commands.dpk.core._detect_os_major_version", return_value=8):
+                mock_run = MagicMock(return_value=MagicMock(returncode=0))
+                with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+                    with patch("os.geteuid", return_value=1000):
+                        _check_dpk_prerequisites(DeployType.tools_home, fix=True)
             args = mock_run.call_args[0][0]
             assert args[0] == "sudo"
             assert "dnf" in args
             assert "ncurses-compat-libs" in args
 
 
+def test_prereq_unknown_os_falls_back_to_compat_pkg(tmp_path):
+    """Unknown OS (no /etc/os-release): falls back to compat-libs install."""
+    with patch("psa.commands.dpk.core.LIB_SEARCH_DIRS", [str(tmp_path)]):
+        with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
+            with patch("psa.commands.dpk.core._detect_os_major_version", return_value=None):
+                mock_run = MagicMock(return_value=MagicMock(returncode=0))
+                with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+                    with patch("os.geteuid", return_value=1000):
+                        _check_dpk_prerequisites(DeployType.tools_home, fix=True)
+            args = mock_run.call_args[0][0]
+            assert "ncurses-compat-libs" in args
+
+
 def test_prereq_fix_as_root_no_sudo(tmp_path):
     """As root, dnf runs without sudo prefix."""
-    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", ["/nonexistent/lib.so"]):
+    with patch("psa.commands.dpk.core.LIB_SEARCH_DIRS", [str(tmp_path)]):
         with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
-            mock_run = MagicMock(return_value=MagicMock(returncode=0))
-            with patch("psa.commands.dpk.core.subprocess.run", mock_run):
-                with patch("os.geteuid", return_value=0):
-                    _check_dpk_prerequisites(DeployType.tools_home, fix=True)
+            with patch("psa.commands.dpk.core._detect_os_major_version", return_value=8):
+                mock_run = MagicMock(return_value=MagicMock(returncode=0))
+                with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+                    with patch("os.geteuid", return_value=0):
+                        _check_dpk_prerequisites(DeployType.tools_home, fix=True)
             args = mock_run.call_args[0][0]
             assert args[0] == "dnf"
 
 
+def test_prereq_el9_fix_creates_symlinks_when_six_present(tmp_path):
+    """EL 9: when .6 libs exist, --fix runs `ln -s` per missing .5 lib (no dnf)."""
+    _touch_all_ncurses_six(tmp_path)
+    with patch("psa.commands.dpk.core.LIB_SEARCH_DIRS", [str(tmp_path)]):
+        with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
+            with patch("psa.commands.dpk.core._detect_os_major_version", return_value=9):
+                mock_run = MagicMock(return_value=MagicMock(returncode=0))
+                with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+                    with patch("os.geteuid", return_value=1000):
+                        _check_dpk_prerequisites(DeployType.tools_home, fix=True)
+            # One ln -s per missing .5 lib; no dnf install since .6 already present
+            calls = [c.args[0] for c in mock_run.call_args_list]
+            assert len(calls) == len(NCURSES_LIB_NAMES)
+            for cmd in calls:
+                assert cmd[0] == "sudo"
+                assert "ln" in cmd
+                assert "-s" in cmd
+            assert not any("dnf" in cmd for cmd in calls)
+
+
+def test_prereq_el9_installs_libs_when_six_missing(tmp_path):
+    """EL 9: when .6 libs are also missing, install ncurses-libs first then symlink."""
+    # Don't create .6 libs — forces the dnf install step
+    with patch("psa.commands.dpk.core.LIB_SEARCH_DIRS", [str(tmp_path)]):
+        with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
+            with patch("psa.commands.dpk.core._detect_os_major_version", return_value=9):
+                mock_run = MagicMock(return_value=MagicMock(returncode=0))
+                with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+                    with patch("os.geteuid", return_value=1000):
+                        _check_dpk_prerequisites(DeployType.tools_home, fix=True)
+            calls = [c.args[0] for c in mock_run.call_args_list]
+            # First call = dnf install ncurses-libs
+            assert "ncurses-libs" in calls[0]
+            assert "dnf" in calls[0]
+            # Subsequent calls = ln -s per lib
+            for cmd in calls[1:]:
+                assert "ln" in cmd
+
+
+def test_prereq_el9_recommend_lists_symlinks(tmp_path):
+    """EL 9: plan output includes per-lib symlink commands (no compat-libs)."""
+    _touch_all_ncurses_six(tmp_path)
+    actions = _plan_ncurses_fix(NCURSES_LIB_NAMES, os_major=9)
+    # No dnf install needed since .6 libs exist (but _plan_ncurses_fix doesn't see tmp_path
+    # without LIB_SEARCH_DIRS patch — so test the patched flow):
+    with patch("psa.commands.dpk.core.LIB_SEARCH_DIRS", [str(tmp_path)]):
+        actions = _plan_ncurses_fix(NCURSES_LIB_NAMES, os_major=9)
+    assert len(actions) == len(NCURSES_LIB_NAMES)
+    for action in actions:
+        assert "ln" in action.command
+        assert "-s" in action.command
+    assert not any("ncurses-compat-libs" in a.command for a in actions)
+
+
+def test_prereq_idempotent_when_already_fixed(tmp_path):
+    """Re-running with all libs present (post-fix) is silent and exits 0."""
+    _touch_all_ncurses(tmp_path)
+    with patch("psa.commands.dpk.core.LIB_SEARCH_DIRS", [str(tmp_path)]):
+        with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
+            with patch("psa.commands.dpk.core._detect_os_major_version", return_value=9):
+                mock_run = MagicMock(return_value=MagicMock(returncode=0))
+                with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+                    _check_dpk_prerequisites(DeployType.tools_home, fix=True)
+                assert not mock_run.called
+
+
+def test_prereq_symlink_failure_raises(tmp_path):
+    """If `ln -s` fails, surface a clear error and exit non-zero."""
+    import pytest
+    from click.exceptions import Exit
+
+    _touch_all_ncurses_six(tmp_path)
+    with patch("psa.commands.dpk.core.LIB_SEARCH_DIRS", [str(tmp_path)]):
+        with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
+            with patch("psa.commands.dpk.core._detect_os_major_version", return_value=9):
+                mock_run = MagicMock(return_value=MagicMock(returncode=1))
+                with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+                    with patch("os.geteuid", return_value=1000):
+                        with pytest.raises(Exit):
+                            _check_dpk_prerequisites(DeployType.tools_home, fix=True)
+
+
 def test_prereq_prompt_yes_installs(tmp_path):
     """Without --fix, prompts user; 'yes' triggers install."""
-    import typer
-
-    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", ["/nonexistent/lib.so"]):
+    with patch("psa.commands.dpk.core.LIB_SEARCH_DIRS", [str(tmp_path)]):
         with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
-            mock_run = MagicMock(return_value=MagicMock(returncode=0))
-            with patch("psa.commands.dpk.core.subprocess.run", mock_run):
-                with patch("psa.commands.dpk.core.typer.confirm", return_value=True):
-                    with patch("os.geteuid", return_value=1000):
-                        _check_dpk_prerequisites(DeployType.tools_home, fix=False)
+            with patch("psa.commands.dpk.core._detect_os_major_version", return_value=8):
+                mock_run = MagicMock(return_value=MagicMock(returncode=0))
+                with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+                    with patch("psa.commands.dpk.core.typer.confirm", return_value=True):
+                        with patch("os.geteuid", return_value=1000):
+                            _check_dpk_prerequisites(DeployType.tools_home, fix=False)
             assert mock_run.called
 
 
@@ -297,28 +374,29 @@ def test_prereq_prompt_no_exits(tmp_path):
     import pytest
     from click.exceptions import Exit
 
-    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", ["/nonexistent/lib.so"]):
+    with patch("psa.commands.dpk.core.LIB_SEARCH_DIRS", [str(tmp_path)]):
         with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", {}):
-            with patch("psa.commands.dpk.core.typer.confirm", return_value=False):
-                with patch("os.geteuid", return_value=1000):
-                    with pytest.raises(Exit):
-                        _check_dpk_prerequisites(DeployType.tools_home, fix=False)
+            with patch("psa.commands.dpk.core._detect_os_major_version", return_value=8):
+                with patch("psa.commands.dpk.core.typer.confirm", return_value=False):
+                    with patch("os.geteuid", return_value=1000):
+                        with pytest.raises(Exit):
+                            _check_dpk_prerequisites(DeployType.tools_home, fix=False)
 
 
 def test_prereq_middleware_checks_libnsl(tmp_path):
     """deploy_type=all checks libnsl and libaio; --fix installs both."""
-    ncurses = tmp_path / "libncursesw.so.5"
-    ncurses.touch()
+    _touch_all_ncurses(tmp_path)
     tux_libs = {
         "libaio.so.1": ["/nonexistent/libaio.so.1"],
         "libnsl.so.1": ["/nonexistent/libnsl.so.1"],
     }
-    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", [str(ncurses)]):
+    with patch("psa.commands.dpk.core.LIB_SEARCH_DIRS", [str(tmp_path)]):
         with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", tux_libs):
-            mock_run = MagicMock(return_value=MagicMock(returncode=0))
-            with patch("psa.commands.dpk.core.subprocess.run", mock_run):
-                with patch("os.geteuid", return_value=1000):
-                    _check_dpk_prerequisites(DeployType.all, fix=True)
+            with patch("psa.commands.dpk.core._detect_os_major_version", return_value=8):
+                mock_run = MagicMock(return_value=MagicMock(returncode=0))
+                with patch("psa.commands.dpk.core.subprocess.run", mock_run):
+                    with patch("os.geteuid", return_value=1000):
+                        _check_dpk_prerequisites(DeployType.all, fix=True)
             args = mock_run.call_args[0][0]
             assert "libaio" in args
             assert "libnsl" in args
@@ -326,15 +404,42 @@ def test_prereq_middleware_checks_libnsl(tmp_path):
 
 def test_prereq_middleware_skipped_for_tools_home(tmp_path):
     """deploy_type=tools_home skips middleware lib checks."""
-    ncurses = tmp_path / "libncursesw.so.5"
-    ncurses.touch()
+    _touch_all_ncurses(tmp_path)
     tux_libs = {
         "libnsl.so.1": ["/nonexistent/libnsl.so.1"],
     }
-    with patch("psa.commands.dpk.core.DPK_REQUIRED_LIBS", [str(ncurses)]):
+    with patch("psa.commands.dpk.core.LIB_SEARCH_DIRS", [str(tmp_path)]):
         with patch("psa.commands.dpk.core.TUXEDO_REQUIRED_LIBS", tux_libs):
-            # Should not raise — tools_home skips tuxedo libs
             _check_dpk_prerequisites(DeployType.tools_home)
+
+
+# --- _detect_os_major_version tests ---
+
+
+def test_detect_os_version_parses_quoted_value(tmp_path):
+    osr = tmp_path / "os-release"
+    osr.write_text('NAME="Oracle Linux Server"\nVERSION_ID="9.4"\nID="ol"\n')
+    with patch("psa.commands.dpk.core.OS_RELEASE_PATH", str(osr)):
+        assert _detect_os_major_version() == 9
+
+
+def test_detect_os_version_parses_unquoted(tmp_path):
+    osr = tmp_path / "os-release"
+    osr.write_text("VERSION_ID=8\n")
+    with patch("psa.commands.dpk.core.OS_RELEASE_PATH", str(osr)):
+        assert _detect_os_major_version() == 8
+
+
+def test_detect_os_version_missing_file_returns_none(tmp_path):
+    with patch("psa.commands.dpk.core.OS_RELEASE_PATH", str(tmp_path / "nope")):
+        assert _detect_os_major_version() is None
+
+
+def test_detect_os_version_no_version_id_returns_none(tmp_path):
+    osr = tmp_path / "os-release"
+    osr.write_text('NAME="Some OS"\n')
+    with patch("psa.commands.dpk.core.OS_RELEASE_PATH", str(osr)):
+        assert _detect_os_major_version() is None
 
 
 # --- _verify_puppet tests ---
@@ -363,3 +468,204 @@ def test_verify_puppet_not_found_no_exit(tmp_path, monkeypatch):
 
     result = _verify_puppet(exit_on_fail=False)
     assert result is False
+
+
+# --- psa dpk sync tests ---
+
+
+def test_sync_hard_fails_when_dpk_cust_home_unset(dpk_tree, monkeypatch):
+    """sync exits non-zero when neither $DPK_CUST_HOME nor config.dpk_cust_home is set."""
+    monkeypatch.delenv("DPK_CUST_HOME", raising=False)
+    monkeypatch.delenv("PSA_KIT", raising=False)
+    config = PsaConfig()  # no dpk_cust_home
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        result = runner.invoke(dpk_app, ["sync", "--dpk-home", str(dpk_tree), "--dry-run"])
+    assert result.exit_code != 0
+    assert "DPK_CUST_HOME not configured" in result.output
+    assert "psa dpk init" in result.output
+
+
+def test_sync_runs_with_dpk_cust_home_from_env(dpk_tree, tmp_path, monkeypatch):
+    """sync proceeds (dry-run) when $DPK_CUST_HOME is set, even if config doesn't have it."""
+    cust = tmp_path / "cust"
+    cust.mkdir()
+    monkeypatch.setenv("DPK_CUST_HOME", str(cust))
+    monkeypatch.delenv("PSA_KIT", raising=False)
+    config = PsaConfig()
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        result = runner.invoke(dpk_app, ["sync", "--dpk-home", str(dpk_tree), "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "Dry run" in result.output
+
+
+def test_sync_help_no_longer_shows_source_or_modules():
+    """--source and --modules are removed (kit-era cruft)."""
+    result = runner.invoke(dpk_app, ["sync", "--help"])
+    assert result.exit_code == 0
+    assert "--source" not in result.output
+    assert "--modules " not in result.output  # space avoids matching --dpk-cust-home etc.
+
+
+def test_sync_uses_dpk_cust_home_flag(dpk_tree, tmp_path, monkeypatch):
+    """--dpk-cust-home overrides env and config."""
+    flag_cust = tmp_path / "flag-cust"
+    flag_cust.mkdir()
+    env_cust = tmp_path / "env-cust"
+    env_cust.mkdir()
+    monkeypatch.setenv("DPK_CUST_HOME", str(env_cust))
+    config = PsaConfig(dpk_cust_home=tmp_path / "cfg-cust")
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        result = runner.invoke(
+            dpk_app,
+            ["sync", "--dpk-home", str(dpk_tree), "--dpk-cust-home", str(flag_cust), "--dry-run"],
+        )
+    assert result.exit_code == 0, result.output
+    assert str(flag_cust) in result.output
+    assert str(env_cust) not in result.output
+
+
+def test_sync_dpk_home_takes_input_as_is(dpk_tree, tmp_path, monkeypatch):
+    """sync no longer auto-appends /dpk; if you pass the parent, you get the parent (which won't have puppet/)."""
+    monkeypatch.setenv("DPK_CUST_HOME", str(tmp_path / "cust"))
+    (tmp_path / "cust").mkdir()
+    parent = dpk_tree.parent  # has no puppet/ dir
+    config = PsaConfig()
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        result = runner.invoke(dpk_app, ["sync", "--dpk-home", str(parent), "--dry-run"])
+    # Parent path exists but has no puppet/ dir → _deploy_hiera_files prints error
+    assert result.exit_code != 0
+
+
+# --- DPK_HOME / dpk_base resolution ---
+
+
+def test_resolve_dpk_home_prefers_cli(monkeypatch, tmp_path):
+    from psa.commands.dpk.core import _resolve_dpk_home
+
+    monkeypatch.setenv("DPK_HOME", str(tmp_path / "env"))
+    config = PsaConfig(dpk_base=tmp_path / "cfg")
+    cli = tmp_path / "cli"
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        assert _resolve_dpk_home(cli) == cli.resolve()
+
+
+def test_resolve_dpk_home_uses_env_over_config(monkeypatch, tmp_path):
+    from psa.commands.dpk.core import _resolve_dpk_home
+
+    env = tmp_path / "env"
+    monkeypatch.setenv("DPK_HOME", str(env))
+    config = PsaConfig(dpk_base=tmp_path / "cfg")
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        assert _resolve_dpk_home(None) == env
+
+
+def test_resolve_dpk_home_derives_from_config_dpk_base(monkeypatch, tmp_path):
+    from psa.commands.dpk.core import _resolve_dpk_home
+
+    monkeypatch.delenv("DPK_HOME", raising=False)
+    config = PsaConfig(dpk_base=tmp_path / "cfg-base")
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        assert _resolve_dpk_home(None) == tmp_path / "cfg-base" / "dpk"
+
+
+def test_resolve_dpk_home_falls_back_to_default(monkeypatch):
+    from psa.commands.dpk.core import DEFAULT_DPK_HOME, _resolve_dpk_home
+
+    monkeypatch.delenv("DPK_HOME", raising=False)
+    monkeypatch.delenv("DPK_BASE", raising=False)
+    config = PsaConfig()
+    with patch("psa.commands.dpk.core.get_config", return_value=config):
+        assert _resolve_dpk_home(None) == Path(DEFAULT_DPK_HOME)
+
+
+def test_dpk_base_config_field_round_trip(tmp_path):
+    """PsaConfig.save then load preserves dpk_base."""
+    config_path = tmp_path / "config.yaml"
+    cfg = PsaConfig(dpk_base=Path("/opt/oracle/psft"))
+    cfg.save(config_path)
+    loaded = PsaConfig.load(config_path)
+    assert loaded.dpk_base == Path("/opt/oracle/psft")
+
+
+def test_sync_escalates_to_root_when_runtime_user_cant_write(dpk_tree, tmp_path, monkeypatch):
+    """When runtime_user sudo write fails (root-owned dir), escalate to sudo bash -c."""
+    cust = tmp_path / "cust"
+    cust.mkdir()
+    monkeypatch.setenv("DPK_CUST_HOME", str(cust))
+    monkeypatch.delenv("PSA_KIT", raising=False)
+    monkeypatch.setenv("USER", "opc")
+
+    config = PsaConfig(sudo_enabled=True, runtime_user="psadm2")
+
+    sudo_calls = []
+
+    def fake_subprocess_run(cmd, **kwargs):
+        sudo_calls.append(cmd)
+        # Reads (sudo su - psadm2 -c "cat ...") return empty stdout (file missing is fine).
+        if cmd[:2] == ["sudo", "su"] and "cat " in cmd[-1]:
+            return MagicMock(returncode=1, stdout="", stderr="No such file\n")
+        # Writes via sudo su - psadm2 fail (psadm2 not owner of root-owned dir)
+        if cmd[:2] == ["sudo", "su"]:
+            return MagicMock(returncode=1, stdout="", stderr="Permission denied\n")
+        # Writes via sudo bash succeed (root)
+        if cmd[:3] == ["sudo", "bash", "-c"]:
+            return MagicMock(returncode=0, stdout="", stderr="")
+        return MagicMock(returncode=1, stdout="", stderr="unexpected\n")
+
+    # Force the as_root=True direct-write attempt to also fail so the sudo bash path runs.
+    real_write_text = Path.write_text
+
+    def fake_write_text(self, *args, **kwargs):
+        if "puppet" in str(self):
+            raise PermissionError(f"mock denied: {self}")
+        return real_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fake_write_text)
+
+    with patch("psa.commands.dpk.core.get_config", return_value=config), \
+         patch("psa.core.fileops.subprocess.run", side_effect=fake_subprocess_run):
+        result = runner.invoke(dpk_app, ["sync", "--dpk-home", str(dpk_tree)])
+
+    assert result.exit_code == 0, result.output
+    runtime_calls = [c for c in sudo_calls if c[:2] == ["sudo", "su"]]
+    root_calls = [c for c in sudo_calls if c[:3] == ["sudo", "bash", "-c"]]
+    assert runtime_calls, f"expected sudo su attempts, got {sudo_calls}"
+    assert root_calls, f"expected sudo bash escalation, got {sudo_calls}"
+
+
+def test_sync_falls_back_to_sudo_when_direct_write_denied(dpk_tree, tmp_path, monkeypatch):
+    """When DPK_HOME is not writable, sync uses sudo via SudoFileOps."""
+    cust = tmp_path / "cust"
+    cust.mkdir()
+    monkeypatch.setenv("DPK_CUST_HOME", str(cust))
+    monkeypatch.delenv("PSA_KIT", raising=False)
+    monkeypatch.setenv("USER", "opc")  # not psadm2 -> _needs_sudo() True
+
+    config = PsaConfig(sudo_enabled=True, runtime_user="psadm2")
+
+    sudo_calls = []
+
+    def fake_subprocess_run(cmd, **kwargs):
+        # SudoFileOps.write_text shells out via `sudo su - <user> -c "..."`
+        sudo_calls.append(cmd)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    # Monkeypatch the path.write_text call so the direct attempt fails with
+    # PermissionError and forces the sudo fallback.
+    real_write_text = Path.write_text
+
+    def fake_write_text(self, *args, **kwargs):
+        # Fail for any write under the dpk_tree puppet/ dir
+        if "puppet" in str(self):
+            raise PermissionError(f"mock denied: {self}")
+        return real_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fake_write_text)
+
+    with patch("psa.commands.dpk.core.get_config", return_value=config), \
+         patch("psa.core.fileops.subprocess.run", side_effect=fake_subprocess_run):
+        result = runner.invoke(dpk_app, ["sync", "--dpk-home", str(dpk_tree)])
+
+    assert result.exit_code == 0, result.output
+    # At least one sudo invocation should have happened (write_text fallback)
+    assert any(c[:2] == ["sudo", "su"] for c in sudo_calls), sudo_calls

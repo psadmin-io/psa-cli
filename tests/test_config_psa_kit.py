@@ -1,4 +1,4 @@
-"""Tests for psa_kit_path and psa_cust_path in config."""
+"""Tests for psa_kit_path and dpk_cust_home in config."""
 
 from pathlib import Path
 
@@ -15,12 +15,20 @@ def test_psa_kit_env_loads(monkeypatch, tmp_path, config_file):
     assert config.psa_kit_path == kit_path
 
 
-def test_psa_cust_env_loads(monkeypatch, tmp_path):
-    """PSA_CUST env var loads into config."""
+def test_dpk_cust_home_env_loads(monkeypatch, tmp_path):
+    """DPK_CUST_HOME env var loads into config."""
     cust_path = tmp_path / "cust"
-    monkeypatch.setenv("PSA_CUST", str(cust_path))
+    monkeypatch.setenv("DPK_CUST_HOME", str(cust_path))
     config = PsaConfig.from_environment()
-    assert config.psa_cust_path == cust_path
+    assert config.dpk_cust_home == cust_path
+
+
+def test_dpk_base_env_loads(monkeypatch, tmp_path):
+    """DPK_BASE env var loads into config.dpk_base."""
+    base_path = tmp_path / "psft"
+    monkeypatch.setenv("DPK_BASE", str(base_path))
+    config = PsaConfig.from_environment()
+    assert config.dpk_base == base_path
 
 
 def test_psa_kit_yaml_loads(tmp_path):
@@ -32,13 +40,13 @@ def test_psa_kit_yaml_loads(tmp_path):
     assert config.psa_kit_path == kit_path
 
 
-def test_psa_cust_yaml_loads(tmp_path):
-    """psa_cust_path in YAML loads correctly."""
+def test_dpk_cust_home_yaml_loads(tmp_path):
+    """dpk_cust_home in YAML loads correctly."""
     cust_path = tmp_path / "cust"
     config_file = tmp_path / "config.yaml"
-    config_file.write_text(yaml.dump({"psa_cust_path": str(cust_path)}))
+    config_file.write_text(yaml.dump({"dpk_cust_home": str(cust_path)}))
     config = PsaConfig.load(config_file)
-    assert config.psa_cust_path == cust_path
+    assert config.dpk_cust_home == cust_path
 
 
 def test_psa_kit_saves_and_roundtrips(tmp_path):
@@ -53,16 +61,16 @@ def test_psa_kit_saves_and_roundtrips(tmp_path):
     assert loaded.psa_kit_path == kit_path
 
 
-def test_psa_cust_saves_and_roundtrips(tmp_path):
-    """psa_cust_path saves to YAML and loads back."""
+def test_dpk_cust_home_saves_and_roundtrips(tmp_path):
+    """dpk_cust_home saves to YAML and loads back."""
     config_file = tmp_path / "config.yaml"
     cust_path = tmp_path / "my-cust"
     config = PsaConfig()
-    config.psa_cust_path = cust_path
+    config.dpk_cust_home = cust_path
     config.save(config_file)
 
     loaded = PsaConfig.load(config_file)
-    assert loaded.psa_cust_path == cust_path
+    assert loaded.dpk_cust_home == cust_path
 
 
 def test_config_set_psa_kit_path(tmp_path):

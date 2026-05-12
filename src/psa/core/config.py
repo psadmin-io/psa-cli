@@ -11,9 +11,8 @@ import yaml
 
 # Default paths for PeopleSoft installations
 DEFAULT_PS_BASE = "/u01/app/psoft"
-DEFAULT_IO_BASE = "/u01/app/io"
-DEFAULT_PSA_KIT = "/u01/app/io/psa-kit"
-DEFAULT_PSA_CUST = "/u01/app/io/psa-cust"
+DEFAULT_PSA_KIT = "/u01/app/psa/psa-kit"
+DEFAULT_DPK_CUST_HOME = "/u01/app/psa/dpk"
 
 # Config file location
 CONFIG_PATH = Path.home() / ".config" / "psa" / "config.yaml"
@@ -46,9 +45,10 @@ class PsaConfig:
     """Configuration for psa tools."""
 
     ps_base: Path = field(default_factory=lambda: Path(DEFAULT_PS_BASE))
-    io_base: Path = field(default_factory=lambda: Path(DEFAULT_IO_BASE))
     psa_kit_path: Optional[Path] = None
-    psa_cust_path: Optional[Path] = None
+    dpk_base: Optional[Path] = None  # DPK install parent dir; dpk_home is dpk_base/dpk
+    dpk_home: Optional[Path] = None  # DPK install dir; defaults to dpk_base/dpk
+    dpk_cust_home: Optional[Path] = None
     ps_cfg_home: Optional[Path] = None
     ps_home: Optional[Path] = None
     ps_app_home: Optional[Path] = None
@@ -61,6 +61,7 @@ class PsaConfig:
     skip_domain_confirm: bool = False  # Skip confirmation when acting on all domains
     multi_homes: list = field(default_factory=list)  # Additional PS_CFG_HOME paths
     dpk_repo_path: Optional[str] = None  # Path to DPK file repository
+    enable_psa_kit: bool = False  # Show `psa kit` group + emit kit Hiera/modulepath layer
 
     @classmethod
     def from_environment(cls) -> "PsaConfig":
@@ -83,14 +84,17 @@ class PsaConfig:
         if ps_base := os.environ.get("PS_BASE"):
             config.ps_base = Path(ps_base)
 
-        if io_base := os.environ.get("IO_BASE"):
-            config.io_base = Path(io_base)
-
         if psa_kit := os.environ.get("PSA_KIT"):
             config.psa_kit_path = Path(psa_kit)
 
-        if psa_cust := os.environ.get("PSA_CUST"):
-            config.psa_cust_path = Path(psa_cust)
+        if dpk_base := os.environ.get("DPK_BASE"):
+            config.dpk_base = Path(dpk_base)
+
+        if dpk_home := os.environ.get("DPK_HOME"):
+            config.dpk_home = Path(dpk_home)
+
+        if dpk_cust := os.environ.get("DPK_CUST_HOME"):
+            config.dpk_cust_home = Path(dpk_cust)
 
         # OPS API from environment
         if ops_url := os.environ.get("PSA_OPS_URL"):
@@ -118,8 +122,6 @@ class PsaConfig:
                 # PS paths
                 if ps_base := data.get("ps_base"):
                     config.ps_base = Path(ps_base)
-                if io_base := data.get("io_base"):
-                    config.io_base = Path(io_base)
                 if ps_cfg_home := data.get("ps_cfg_home"):
                     config.ps_cfg_home = Path(ps_cfg_home)
                 if ps_home := data.get("ps_home"):
@@ -130,8 +132,12 @@ class PsaConfig:
                     config.ps_cust_home = Path(ps_cust_home)
                 if psa_kit_path := data.get("psa_kit_path"):
                     config.psa_kit_path = Path(psa_kit_path)
-                if psa_cust_path := data.get("psa_cust_path"):
-                    config.psa_cust_path = Path(psa_cust_path)
+                if dpk_base := data.get("dpk_base"):
+                    config.dpk_base = Path(dpk_base)
+                if dpk_home := data.get("dpk_home"):
+                    config.dpk_home = Path(dpk_home)
+                if dpk_cust_home := data.get("dpk_cust_home"):
+                    config.dpk_cust_home = Path(dpk_cust_home)
                 if runtime_user := data.get("runtime_user", data.get("domain_user")):
                     config.runtime_user = runtime_user
 
@@ -146,6 +152,8 @@ class PsaConfig:
                     config.multi_homes = [Path(p) for p in multi_homes]
                 if dpk_repo_path := data.get("dpk_repo_path"):
                     config.dpk_repo_path = dpk_repo_path
+                if "enable_psa_kit" in data:
+                    config.enable_psa_kit = bool(data["enable_psa_kit"])
 
                 # OPS config (env vars take precedence)
                 if ops_data := data.get("ops"):
@@ -183,8 +191,6 @@ class PsaConfig:
         # Only save non-default values
         if self.ps_base != Path(DEFAULT_PS_BASE):
             data["ps_base"] = str(self.ps_base)
-        if self.io_base != Path(DEFAULT_IO_BASE):
-            data["io_base"] = str(self.io_base)
         if self.ps_cfg_home:
             data["ps_cfg_home"] = str(self.ps_cfg_home)
         if self.ps_home:
@@ -195,8 +201,12 @@ class PsaConfig:
             data["ps_cust_home"] = str(self.ps_cust_home)
         if self.psa_kit_path:
             data["psa_kit_path"] = str(self.psa_kit_path)
-        if self.psa_cust_path:
-            data["psa_cust_path"] = str(self.psa_cust_path)
+        if self.dpk_base:
+            data["dpk_base"] = str(self.dpk_base)
+        if self.dpk_home:
+            data["dpk_home"] = str(self.dpk_home)
+        if self.dpk_cust_home:
+            data["dpk_cust_home"] = str(self.dpk_cust_home)
         if self.runtime_user != "psadm2":
             data["runtime_user"] = self.runtime_user
 
@@ -211,6 +221,8 @@ class PsaConfig:
             data["multi_homes"] = [str(p) for p in self.multi_homes]
         if self.dpk_repo_path:
             data["dpk_repo_path"] = self.dpk_repo_path
+        if self.enable_psa_kit:
+            data["enable_psa_kit"] = True
 
         # OPS config
         if self.ops.url:
@@ -244,6 +256,13 @@ class PsaConfig:
             return self.ps_cfg_home
         # Default location
         return self.ps_base / "cfg"
+
+    def get_dpk_home(self) -> Path:
+        """Get DPK_HOME: explicit dpk_home, else dpk_base/dpk, else ps_base/dpk."""
+        if self.dpk_home:
+            return self.dpk_home
+        base = self.dpk_base or self.ps_base
+        return base / "dpk"
 
     def get_appserv_path(self) -> Path:
         """Get path to appserver domains."""

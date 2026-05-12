@@ -80,19 +80,26 @@ class TestParseStatusOutput:
     def test_prcs_unknown(self):
         assert _parse_status_output("unexpected output", "prcs") == "unknown"
 
-    # --- pia ---
+    # --- web ---
 
-    def test_pia_running(self):
-        assert _parse_status_output("PIA is running", "pia") == "running"
+    def test_web_running(self):
+        assert _parse_status_output("PIA is running", "web") == "running"
 
-    def test_pia_stopped(self):
-        assert _parse_status_output("PIA is stopped", "pia") == "stopped"
+    def test_web_stopped(self):
+        assert _parse_status_output("PIA is stopped", "web") == "stopped"
 
-    def test_pia_not_running(self):
-        assert _parse_status_output("PIA is not running", "pia") == "stopped"
+    def test_web_not_running(self):
+        assert _parse_status_output("PIA is not running", "web") == "stopped"
 
-    def test_pia_unknown(self):
-        assert _parse_status_output("unexpected output", "pia") == "unknown"
+    def test_web_started(self):
+        # PT 8.62 psadmin -w status emits just "started"
+        assert _parse_status_output("started\nPicked up _JAVA_OPTIONS: ...\n", "web") == "running"
+
+    def test_web_not_started(self):
+        assert _parse_status_output("not started", "web") == "stopped"
+
+    def test_web_unknown(self):
+        assert _parse_status_output("unexpected output", "web") == "unknown"
 
 
 class TestFormatCommandError:
@@ -145,9 +152,9 @@ class TestIsAlreadyStopped:
         result = PsadminResult(success=False, exit_code=1, output="unexpected error text", command="")
         assert _is_already_stopped(result, _make_domain("APPDOM")) is False
 
-    def test_pia_stopped(self):
+    def test_web_stopped(self):
         result = PsadminResult(success=False, exit_code=1, output="PIA is not running", command="")
-        assert _is_already_stopped(result, _make_domain("TESTPIA", "pia")) is True
+        assert _is_already_stopped(result, _make_domain("TESTWEB", "web")) is True
 
     def test_prcs_not_started(self):
         result = PsadminResult(success=False, exit_code=1, output="PRCSDOM is not started", command="")

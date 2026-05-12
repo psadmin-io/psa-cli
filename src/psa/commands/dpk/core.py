@@ -1,27 +1,52 @@
 """DPK lifecycle management commands."""
 
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Union
+from typing import List, NamedTuple, Optional, Union
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
-from psa.core.config import get_config
-from psa.core.output import print_error, print_info, print_json, print_success, print_warning
+from psa.core import dpk_services
+from psa.core.config import PsaConfig, get_config
+from psa.core.discovery import run_discovery
+from psa.core.domain import DomainInfo
+from psa.core.fileops import SudoFileOps
+from psa.core.output import (
+    print_error,
+    print_info,
+    print_json,
+    print_success,
+    print_warning,
+    run_step,
+)
+from psa.core.psadmin import PsadminExecutor, PsadminResult
+from psa.core.subprocess_runner import print_stderr_on_failure, stream_subprocess
 
 console = Console()
 
-# DPK prerequisite libraries
-DPK_REQUIRED_LIBS = [
-    "/lib64/libncursesw.so.5",
-    "/usr/lib64/libncursesw.so.5",
+# DPK prerequisite libraries: ncurses .5 family expected by Oracle's bundled
+# Python/Ruby and the DPK setup script. EL 7/8 ship these via ncurses-compat-libs;
+# EL 9+ omits the package and we symlink the .6 libs (ncurses-libs) instead.
+NCURSES_LIB_NAMES = [
+    "libncursesw.so.5",
+    "libtinfo.so.5",
+    "libncurses.so.5",
+    "libform.so.5",
+    "libpanel.so.5",
+    "libmenu.so.5",
 ]
+
+LIB_SEARCH_DIRS = ["/usr/lib64", "/lib64"]
+
+OS_RELEASE_PATH = "/etc/os-release"
 
 # Tuxedo/OUI prerequisite libraries (for middleware installs)
 # Note: Actual requirements vary by OS version
@@ -29,6 +54,11 @@ TUXEDO_REQUIRED_LIBS = {
     "libaio.so.1": ["/lib64/libaio.so.1", "/usr/lib64/libaio.so.1"],
     "libnsl.so.1": ["/lib64/libnsl.so.1", "/usr/lib64/libnsl.so.1"],
 }
+
+
+class FixAction(NamedTuple):
+    description: str
+    command: List[str]
 
 # Patterns to detect first DPK zip (in priority order)
 FIRST_ZIP_PATTERNS = [
@@ -40,31 +70,50 @@ FIRST_ZIP_PATTERNS = [
 # Environment variable names
 ENV_DPK_REPO = "DPK_REPO"
 ENV_DPK_INSTALL = "DPK_INSTALL"
-ENV_DPK_BASE = "DPK_BASE"
+ENV_DPK_BASE = "DPK_BASE"  # Parent dir, used by Oracle's DPK setup script
+ENV_DPK_HOME = "DPK_HOME"  # The DPK install dir itself, = DPK_BASE/dpk
 
 # Defaults
 DEFAULT_DPK_BASE = "/u01/app/psoft"
+DEFAULT_DPK_HOME = "/u01/app/psoft/dpk"
 
-def _generate_hiera_yaml(psa_cust_path: Optional[Path], psa_kit_path: Optional[Path]) -> str:
-    """Generate hiera.yaml with 3-tier hierarchy: CUST -> KIT -> DPK base.
+def _generate_hiera_yaml(
+    dpk_cust_home: Optional[Path],
+    psa_kit_path: Optional[Path],
+    enable_psa_kit: bool = False,
+    dpk_home: Optional[Path] = None,
+) -> str:
+    """Generate hiera.yaml hierarchy: DPK_CUST_HOME -> [KIT] -> DPK base.
 
     Customer and kit layers use absolute datadir paths so Puppet reads from
     those locations. DPK layers use relative paths (the default data dir).
+    Kit layer is only emitted when enable_psa_kit=True.
+
+    The defaults block enables the eyaml backend so encrypted DPK values
+    (gateway/profile/admin passwords) decrypt at lookup time. Key paths
+    resolve to <dpk_home>/puppet/secure/keys/, the conventional DPK location.
     """
+    keys_base = (dpk_home or Path(DEFAULT_DPK_HOME)) / "puppet" / "secure" / "keys"
+    private_key = keys_base / "private_key.pkcs7.pem"
+    public_key = keys_base / "public_key.pkcs7.pem"
+
     lines = [
         "---",
         "version: 5",
         "",
         "defaults:",
         "  datadir: data",
-        "  data_hash: yaml_data",
+        "  lookup_key: eyaml_lookup_key",
+        "  options:",
+        f"    pkcs7_private_key: {private_key}",
+        f"    pkcs7_public_key:  {public_key}",
         "",
         "hierarchy:",
     ]
 
     # --- Customer layer (absolute datadir) ---
-    if psa_cust_path:
-        cust_datadir = str(psa_cust_path / "dpk" / "puppet" / "production" / "data")
+    if dpk_cust_home:
+        cust_datadir = str(dpk_cust_home / "data")
         lines += [
             f'  - name: "Per-domain customizations"',
             f'    datadir: "{cust_datadir}"',
@@ -76,7 +125,7 @@ def _generate_hiera_yaml(psa_cust_path: Optional[Path], psa_kit_path: Optional[P
             "",
             f'  - name: "Environment-level config"',
             f'    datadir: "{cust_datadir}"',
-            f'    path: "env/%{{facts.env}}.yaml"',
+            f'    path: "environment/%{{facts.env}}.yaml"',
             "",
             f'  - name: "Tier-level config"',
             f'    datadir: "{cust_datadir}"',
@@ -93,7 +142,7 @@ def _generate_hiera_yaml(psa_cust_path: Optional[Path], psa_kit_path: Optional[P
         ]
 
     # --- Kit layer (absolute datadir) ---
-    if psa_kit_path:
+    if enable_psa_kit and psa_kit_path:
         kit_datadir = str(psa_kit_path / "dpk" / "puppet" / "production" / "data")
         lines += [
             f'  - name: "psa-ops common"',
@@ -103,10 +152,12 @@ def _generate_hiera_yaml(psa_cust_path: Optional[Path], psa_kit_path: Optional[P
         ]
 
     # --- DPK base layers (relative, uses default datadir) ---
+    # Order: defaults (most overridable) -> customizations -> unix -> deployment
+    # -> configuration (broad runtime values) -> patches (deepest fallback).
     lines += [
         '  # Delivered DPK YAML files (Oracle defaults)',
-        '  - name: "DPK configuration"',
-        '    path: "psft_configuration.yaml"',
+        '  - name: "DPK defaults"',
+        '    path: "defaults.yaml"',
         "",
         '  - name: "DPK customizations"',
         '    path: "psft_customizations.yaml"',
@@ -117,28 +168,37 @@ def _generate_hiera_yaml(psa_cust_path: Optional[Path], psa_kit_path: Optional[P
         '  - name: "DPK deployment"',
         '    path: "psft_deployment.yaml"',
         "",
+        '  - name: "DPK configuration"',
+        '    path: "psft_configuration.yaml"',
+        "",
         '  - name: "DPK patches"',
         '    path: "psft_patches.yaml"',
-        "",
-        '  - name: "DPK defaults"',
-        '    path: "defaults.yaml"',
     ]
 
     return "\n".join(lines) + "\n"
 
-# psa-ops site.pp template (role-based node classification)
-SITE_PP_TEMPLATE = """\
-node default {
-  case $facts[ps_role] {
-    'app':        { include ::io_role::io_tools_appserver }
-    'appbat':     { include ::io_role::io_tools_appbatch }
-    'web':        { include ::io_role::io_tools_pia }
-    'prcs':       { include ::io_role::io_tools_prcs }
-    'mid':        { include ::io_role::io_tools_midtier }
-    'webapp':     { include ::io_role::io_tools_webapp }
-  }
+# Role -> class included by site.pp. Source of truth for both the rendered
+# manifest below and the role-resolution announcement in `psa dpk apply`.
+ROLE_CLASS_MAP = {
+    "app": "io_role::io_tools_appserver",
+    "appbat": "io_role::io_tools_appbatch",
+    "web": "io_role::io_tools_pia",
+    "prcs": "io_role::io_tools_prcs",
+    "mid": "io_role::io_tools_midtier",
+    "webapp": "io_role::io_tools_webapp",
 }
-"""
+
+
+def _render_site_pp() -> str:
+    lines = ["node default {", "  case $facts[ps_role] {"]
+    for role, cls in ROLE_CLASS_MAP.items():
+        key = f"'{role}':"
+        lines.append(f"    {key:<13} {{ include ::{cls} }}")
+    lines += ["  }", "}", ""]
+    return "\n".join(lines)
+
+
+SITE_PP_TEMPLATE = _render_site_pp()
 
 
 class DeployType(str, Enum):
@@ -157,17 +217,196 @@ app = typer.Typer(
 )
 
 
+def _resolve_puppet_bin(resolved_path: Path) -> Path:
+    """Locate the puppet binary or exit with a friendly message.
+
+    Search order: DPK-bundled agent, /opt/puppetlabs, then $PATH.
+    """
+    dpk_base = resolved_path.parent  # e.g., /opt/oracle/psft
+    dpk_puppet = dpk_base / "psft_puppet_agent" / "bin" / "puppet"
+    if dpk_puppet.exists():
+        return dpk_puppet
+    if Path("/opt/puppetlabs/puppet/bin/puppet").exists():
+        return Path("/opt/puppetlabs/puppet/bin/puppet")
+    try:
+        result = subprocess.run(["which", "puppet"], capture_output=True, text=True)
+        if result.returncode == 0:
+            candidate = Path(result.stdout.strip())
+            if candidate.exists():
+                return candidate
+    except FileNotFoundError:
+        pass
+    print_error("Puppet not found. Run 'psa dpk setup' first")
+    print_info(f"Expected at: {dpk_puppet}")
+    raise typer.Exit(1)
+
+
+def _build_facter_env(
+    config: PsaConfig,
+    server_facts: dict,
+    *,
+    env: Optional[str],
+    tier: Optional[str],
+    pillar: Optional[str],
+    zone: Optional[str],
+    role: Optional[str],
+    quiet: bool = False,
+) -> tuple[dict, list]:
+    """Resolve fact precedence (CLI > server.yaml > config default) and
+    build a FACTER_*-populated env dict.
+
+    Only sets FACTER_* when the value comes from a CLI flag or config
+    default; if server.yaml supplies the fact, leaves FACTER_* unset so
+    Facter reads server.yaml directly. Side effect: prints
+    `Reading from server.yaml: ...` and `Setting fact: ...` info lines
+    (suppressed when ``quiet=True``).
+
+    Returns (facter_env, defaulted_messages).
+    """
+    ops = config.ops
+
+    cli_provided = {
+        "env": env is not None,
+        "ps_tier": tier is not None,
+        "ps_pillar": pillar is not None,
+        "ps_zone": zone is not None,
+        "ps_role": role is not None,
+    }
+
+    defaulted: list = []
+    if not env and "env" not in server_facts and ops.environment_name:
+        env = ops.environment_name
+        defaulted.append(f"env={env}")
+    if not tier and "ps_tier" not in server_facts and ops.tier:
+        tier = ops.tier
+        defaulted.append(f"tier={tier}")
+    if not pillar and "ps_pillar" not in server_facts and ops.pillar:
+        pillar = ops.pillar
+        defaulted.append(f"pillar={pillar}")
+    if not zone and "ps_zone" not in server_facts and ops.zone:
+        zone = ops.zone
+        defaulted.append(f"zone={zone}")
+    if not role and "ps_role" not in server_facts and ops.ps_role:
+        role = ops.ps_role
+        defaulted.append(f"role={role}")
+
+    server_provided = [
+        k for k in ("ps_role", "env", "ps_tier", "ps_zone", "ps_pillar")
+        if k in server_facts
+    ]
+    if server_provided and not quiet:
+        print_info(f"Reading from server.yaml: {', '.join(server_provided)}")
+
+    facter_env = os.environ.copy()
+
+    def _set(fact: str, value: Optional[str]) -> None:
+        if not value:
+            return
+        if (
+            not cli_provided.get(fact, False)
+            and fact in server_facts
+            and value == server_facts.get(fact)
+        ):
+            return
+        facter_env[f"FACTER_{fact}"] = value
+        if not quiet:
+            print_info(f"Setting fact: {fact}={value}")
+
+    _set("env", env)
+    _set("ps_tier", tier)
+    _set("ps_pillar", pillar)
+    _set("ps_zone", zone)
+    _set("ps_role", role)
+
+    return facter_env, defaulted
+
+
+def _wrap_with_sudo(
+    cmd: list,
+    facter_env: dict,
+    config: PsaConfig,
+) -> tuple[list, dict]:
+    """Auto-sudo a puppet command unless we're already root, running as the
+    configured runtime_user, or sudo is disabled.
+
+    sudo strips env by default; lift FACTER_* into VAR=val args (the form
+    sudo recognizes for the target command) when sudo'ing. Returns
+    (final_cmd, run_env).
+    """
+    user = os.environ.get("USER")
+    needs_sudo = (
+        config.sudo_enabled
+        and os.geteuid() != 0
+        and user != config.runtime_user
+    )
+    if not needs_sudo:
+        return cmd, facter_env
+
+    facter_args = [
+        f"{k}={v}" for k, v in facter_env.items() if k.startswith("FACTER_")
+    ]
+    return ["sudo"] + facter_args + list(cmd), os.environ.copy()
+
+
+def _read_server_facts(config: PsaConfig) -> dict:
+    """Read facts from <facts.d>/server.yaml. Empty dict if missing or unreadable.
+
+    Searches the same standard system paths as `psa dpk facts` writes to
+    (FACTS_D_CANDIDATES from facts.py). Server identity lives in /etc/, not
+    the DPK install tree.
+    """
+    import yaml as _yaml
+
+    from psa.commands.dpk.facts import FACTS_D_CANDIDATES
+    from psa.core.fileops import SudoFileOps
+
+    candidates = [Path(d) / "server.yaml" for d in FACTS_D_CANDIDATES]
+    fileops = SudoFileOps(config)
+    for candidate in candidates:
+        content = fileops.read_text(candidate)
+        if content is None:
+            continue
+        try:
+            data = _yaml.safe_load(content)
+        except _yaml.YAMLError:
+            return {}
+        return data if isinstance(data, dict) else {}
+    return {}
+
+
 def _get_env_path(env_var: str, cli_value: Optional[Path]) -> Optional[Path]:
-    """Get path from CLI arg, environment variable, or default."""
+    """Get path from CLI arg, environment variable, config, or default.
+
+    For DPK_BASE: cli -> $DPK_BASE -> config.dpk_base -> DEFAULT_DPK_BASE.
+    """
     if cli_value:
         return cli_value
     env_val = os.environ.get(env_var)
     if env_val:
         return Path(env_val)
-    # Return default for DPK_BASE
     if env_var == ENV_DPK_BASE:
+        cfg = get_config()
+        if cfg.dpk_base:
+            return cfg.dpk_base
         return Path(DEFAULT_DPK_BASE)
     return None
+
+
+def _resolve_dpk_home(cli_value: Optional[Path]) -> Path:
+    """Resolve DPK_HOME (the dpk install dir).
+
+    Order: cli -> $DPK_HOME -> config.dpk_home -> config.dpk_base/dpk -> DEFAULT_DPK_HOME.
+    """
+    if cli_value:
+        return cli_value.resolve()
+    if env := os.environ.get(ENV_DPK_HOME):
+        return Path(env)
+    cfg = get_config()
+    if cfg.dpk_home:
+        return cfg.dpk_home
+    if cfg.dpk_base:
+        return cfg.dpk_base / "dpk"
+    return Path(DEFAULT_DPK_HOME)
 
 
 def _find_first_zip(directory: Path) -> Optional[Path]:
@@ -457,11 +696,15 @@ def setup(
         # so use shell pipe instead.
         shell_cmd = "echo n | " + " ".join(shlex.quote(c) for c in cmd)
         try:
-            result = subprocess.run(shell_cmd, shell=True, cwd=setup_script.parent, timeout=600)
-            if result.returncode == 0:
+            rc, _, _ = stream_subprocess(
+                ["sh", "-c", shell_cmd],
+                cwd=setup_script.parent,
+                timeout=600,
+            )
+            if rc == 0:
                 print_success("Prerequisites check completed")
             else:
-                print_error(f"Prerequisites check failed (exit {result.returncode})")
+                print_error(f"Prerequisites check failed (exit {rc})")
                 raise typer.Exit(1)
         except subprocess.TimeoutExpired:
             print_error("Prereq check timed out")
@@ -496,11 +739,11 @@ def setup(
             return
 
         try:
-            result = subprocess.run(cmd, cwd=setup_script.parent, timeout=600)
-            if result.returncode == 0:
+            rc, _, _ = stream_subprocess(cmd, cwd=setup_script.parent, timeout=600)
+            if rc == 0:
                 print_success("Post-configuration completed")
             else:
-                print_error(f"Post-configuration failed (exit {result.returncode})")
+                print_error(f"Post-configuration failed (exit {rc})")
                 raise typer.Exit(1)
         except subprocess.TimeoutExpired:
             print_error("Post-configuration timed out")
@@ -584,16 +827,16 @@ deploy_type={deploy_type.value}
 
         # Run setup script
         try:
-            result = subprocess.run(
+            rc, _, _ = stream_subprocess(
                 cmd,
                 cwd=setup_script.parent,
                 timeout=7200,  # 2 hour timeout
             )
-            if result.returncode == 0:
+            if rc == 0:
                 print_success("DPK setup completed successfully")
-                print_info(f"Next: psa dpk apply --dpk-path {base_path}")
+                print_info(f"Next: psa dpk apply --dpk-home {base_path / 'dpk'}")
             else:
-                print_error(f"DPK setup failed (exit {result.returncode})")
+                print_error(f"DPK setup failed (exit {rc})")
                 raise typer.Exit(1)
         except subprocess.TimeoutExpired:
             print_error("Setup timed out (>2 hours)")
@@ -622,6 +865,29 @@ def cleanup(
         "-b",
         help=f"PeopleSoft base directory (or ${ENV_DPK_BASE})",
     ),
+    domains_only: bool = typer.Option(
+        False,
+        "--domains-only",
+        help="Remove only domains + their DPK systemd units; keep PS_HOME, Tuxedo, WebLogic, DPK install intact",
+    ),
+    domain: Optional[str] = typer.Option(
+        None,
+        "--domain",
+        "-d",
+        help="With --domains-only, scope cleanup to a single domain by name",
+    ),
+    domain_type: Optional[str] = typer.Option(
+        None,
+        "--type",
+        "-t",
+        help="With --domains-only, restrict to a domain type (app, prcs, web)",
+    ),
+    keep_services: bool = typer.Option(
+        False,
+        "--keep-services",
+        help="With --domains-only, skip systemd unit removal (config-only cleanup)",
+    ),
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation prompt"),
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -632,13 +898,30 @@ def cleanup(
     """
     Clean up DPK installation
 
-    Runs the DPK cleanup script to remove installed software and components.
-    Wrapper for: ./psft-dpk-setup.sh --cleanup --psft_base_dir <path>
+    Default: full DPK teardown via psft-dpk-setup.sh --cleanup.
+    With --domains-only: scoped removal of domain configs + DPK systemd units.
 
     Examples:
         psa dpk cleanup --base-dir /u01/psft
-        psa dpk cleanup --dry-run
+        psa dpk cleanup --domains-only
+        psa dpk cleanup --domains-only --domain APPDOM --type app
+        psa dpk cleanup --domains-only --keep-services --dry-run
     """
+    if domains_only:
+        _cleanup_domains_only(
+            domain=domain,
+            domain_type=domain_type,
+            keep_services=keep_services,
+            force=force,
+            dry_run=dry_run,
+        )
+        return
+
+    # Scoping flags only make sense with --domains-only
+    if domain or domain_type or keep_services:
+        print_error("--domain/--type/--keep-services require --domains-only")
+        raise typer.Exit(2)
+
     # Resolve paths
     install_path = _get_env_path(ENV_DPK_INSTALL, install_dir)
     base_path = _get_env_path(ENV_DPK_BASE, base_dir)
@@ -673,15 +956,173 @@ def cleanup(
         return
 
     try:
-        result = subprocess.run(cmd, cwd=setup_script.parent, timeout=600)
-        if result.returncode == 0:
+        rc, _, _ = stream_subprocess(cmd, cwd=setup_script.parent, timeout=600)
+        if rc == 0:
             print_success("DPK cleanup completed")
         else:
-            print_error(f"Cleanup failed (exit {result.returncode})")
+            print_error(f"Cleanup failed (exit {rc})")
             raise typer.Exit(1)
     except subprocess.TimeoutExpired:
         print_error("Cleanup timed out")
         raise typer.Exit(1)
+
+
+def _sudo_rm_rf(path: Path, timeout: int = 60) -> PsadminResult:
+    """Recursively remove ``path`` as root. Wrapped as PsadminResult for run_step.
+
+    Uses sudo when not already root. The literal ``rm -rf`` (no glob/expansion).
+    """
+    cmd = ["rm", "-rf", str(path)]
+    if os.geteuid() != 0:
+        cmd = ["sudo"] + cmd
+    cmd_str = " ".join(cmd)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return PsadminResult(
+            success=r.returncode == 0,
+            exit_code=r.returncode,
+            output=(r.stdout + r.stderr).strip() or f"Removed {path}",
+            command=cmd_str,
+        )
+    except subprocess.TimeoutExpired:
+        return PsadminResult(success=False, exit_code=-1, output="rm timed out", command=cmd_str)
+    except Exception as e:
+        return PsadminResult(success=False, exit_code=-1, output=str(e), command=cmd_str)
+
+
+def _cleanup_domains_only(
+    domain: Optional[str],
+    domain_type: Optional[str],
+    keep_services: bool,
+    force: bool,
+    dry_run: bool,
+) -> None:
+    """Scoped cleanup: remove domain configs + DPK systemd units.
+
+    Per-domain flow: stop -> kill (if needed) -> psadmin delete -> rm -rf fallback
+    -> systemd unit teardown. Single trailing daemon-reload.
+    """
+    # Local import to keep psa.commands.dpk.core importable without pulling in
+    # the domain command surface up-front (and to dodge any future circular-import risk).
+    from psa.commands.domain import _execute_domain_command, _is_already_stopped
+
+    config = get_config()
+
+    # Resolve targets. When --domain is given without --type, gather ALL
+    # matching domains across types — DPK installs the same name as app+prcs+web
+    # and we want one invocation to clean up all three.
+    if domain:
+        try:
+            all_for_type = run_discovery(config, domain_type)
+        except typer.Exit:
+            raise
+        targets = [d for d in all_for_type if d.name == domain]
+        if not targets:
+            print_error(f"Domain '{domain}' not found")
+            raise typer.Exit(1)
+    else:
+        targets = run_discovery(config, domain_type)
+        if not targets:
+            print_error("No domains found")
+            raise typer.Exit(1)
+
+    # Build preview table
+    table = Table(title="Cleanup targets (--domains-only)")
+    table.add_column("Name", style="cyan")
+    table.add_column("Type", style="magenta")
+    table.add_column("Path")
+    table.add_column("Systemd unit")
+    for d in targets:
+        if keep_services:
+            unit_label = "[dim](kept)[/dim]"
+        else:
+            try:
+                unit = dpk_services.unit_name(d.domain_type, d.name)
+                paths = dpk_services.find_unit_paths(unit)
+                unit_label = ", ".join(str(p) for p in paths) if paths else "[dim](none)[/dim]"
+            except ValueError:
+                unit_label = "[dim](unknown type)[/dim]"
+        table.add_row(d.name, d.domain_type, str(d.path), unit_label)
+    console.print(table)
+    print_info(
+        "PS_HOME, Tuxedo, WebLogic, DB client, and DPK install dir will NOT be touched."
+    )
+
+    if dry_run:
+        console.print("[dim]Dry run - not executing[/dim]")
+        return
+
+    if not force:
+        if not typer.confirm(f"Remove {len(targets)} domain(s)?"):
+            raise typer.Abort()
+
+    executor = PsadminExecutor(config)
+    fileops = SudoFileOps(config)
+    failed = 0
+
+    for d in targets:
+        print_info(f"Cleaning {d.domain_type} domain: {d.name}")
+
+        # 1. Stop (graceful) — already-stopped treated as warning, not error
+        stop_result = run_step(
+            "Stopping",
+            lambda d=d: _execute_domain_command(d, "stop", executor),
+            warn_if=lambda r, d=d: _is_already_stopped(r, d),
+        )
+
+        # 2. Kill if stop failed and not already stopped
+        if not stop_result.success and not _is_already_stopped(stop_result, d):
+            run_step(
+                "Killing",
+                lambda d=d: _execute_domain_command(d, "kill", executor),
+                warn_if=lambda r, d=d: _is_already_stopped(r, d),
+            )
+
+        # 3. psadmin delete
+        delete_result = run_step(
+            "psadmin delete",
+            lambda d=d: _execute_domain_command(d, "delete", executor),
+        )
+
+        # 4. rm -rf fallback if dir still exists
+        if fileops.exists(d.path):
+            rm_result = run_step(
+                "Removing domain directory",
+                lambda p=d.path: _sudo_rm_rf(p),
+            )
+            if not rm_result.success:
+                print_error(f"Failed to remove {d.path}: {rm_result.output}")
+                failed += 1
+                continue
+        elif not delete_result.success:
+            # psadmin delete may have succeeded structurally even if it
+            # reported non-zero; only flag as failure if dir still exists.
+            print_warning(f"psadmin delete reported: {delete_result.output.strip()[:200]}")
+
+        # 5. Systemd unit teardown
+        if not keep_services:
+            svc_result = run_step(
+                f"Removing systemd unit psft-*-{d.name}",
+                lambda d=d: dpk_services.remove_unit(d.domain_type, d.name),
+            )
+            if not svc_result.success:
+                print_error(f"Service removal failed: {svc_result.output}")
+                failed += 1
+                continue
+
+        print_success(f"Domain {d.name} cleaned up")
+
+    # Single trailing daemon-reload
+    if not keep_services:
+        run_step(
+            "systemctl daemon-reload",
+            lambda: dpk_services.daemon_reload(),
+        )
+
+    if failed:
+        print_warning(f"{len(targets) - failed}/{len(targets)} succeeded, {failed} failed")
+        raise typer.Exit(1)
+    print_success("Domain cleanup complete")
 
 
 @app.command("status")
@@ -716,13 +1157,14 @@ def status(
     else:
         puppet_ok = _verify_puppet(exit_on_fail=False)
 
-    # Check common DPK locations
+    # Check common DPK locations: env var, configured base, then well-known paths
     dpk_paths = [
-        Path(os.environ.get(ENV_DPK_BASE, DEFAULT_DPK_BASE)),
+        _get_env_path(ENV_DPK_BASE, None),
         Path("/u01/app/psoft/dpk"),
         Path("/opt/dpk"),
         Path("/home/psadm2/dpk"),
     ]
+    dpk_paths = [p for p in dpk_paths if p is not None]
 
     dpk_found = None
     for path in dpk_paths:
@@ -839,10 +1281,24 @@ def apply(
         "-d",
         help="Puppet debug output",
     ),
-    dpk_path: Path = typer.Option(
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Stream full puppet output (Info/Debug lines included)",
+    ),
+    summary: bool = typer.Option(
+        False,
+        "--summary",
+        "-s",
+        help="Terse output: drop deprecation warnings & noisy notices, "
+             "show end-of-run summary. Overridden by --verbose/--debug.",
+    ),
+    dpk_home: Optional[Path] = typer.Option(
         None,
-        "--dpk-path",
-        help=f"Path to DPK installation (or ${ENV_DPK_BASE})",
+        "--dpk-home",
+        "-d",
+        help=f"DPK install dir (or ${ENV_DPK_HOME}, or config.dpk_base/dpk; default {DEFAULT_DPK_HOME})",
     ),
 ) -> None:
     """
@@ -856,12 +1312,10 @@ def apply(
         psa dpk apply --role app
         psa dpk apply --env FSCMDEV --tier DEV
         psa dpk apply --dry-run
-        psa dpk apply --debug
+        psa dpk apply --verbose
     """
-    # Resolve DPK path
-    resolved_path = _get_env_path(ENV_DPK_BASE, dpk_path)
-    if not resolved_path:
-        resolved_path = Path(DEFAULT_DPK_BASE)
+    # Resolve DPK_HOME (the dpk install dir)
+    resolved_path = _resolve_dpk_home(dpk_home)
 
     # Verify paths exist
     puppet_dir = resolved_path / "puppet"
@@ -876,27 +1330,7 @@ def apply(
         print_error(f"Site manifest not found: {site_pp}")
         raise typer.Exit(1)
 
-    # Find puppet binary - check DPK location first, then system
-    puppet_bin = None
-    dpk_base = resolved_path.parent  # e.g., /opt/oracle/psft
-    dpk_puppet = dpk_base / "psft_puppet_agent" / "bin" / "puppet"
-    if dpk_puppet.exists():
-        puppet_bin = dpk_puppet
-    elif Path("/opt/puppetlabs/puppet/bin/puppet").exists():
-        puppet_bin = Path("/opt/puppetlabs/puppet/bin/puppet")
-    else:
-        # Try PATH
-        try:
-            result = subprocess.run(["which", "puppet"], capture_output=True, text=True)
-            if result.returncode == 0:
-                puppet_bin = Path(result.stdout.strip())
-        except FileNotFoundError:
-            pass
-
-    if not puppet_bin or not puppet_bin.exists():
-        print_error("Puppet not found. Run 'psa dpk setup' first")
-        print_info(f"Expected at: {dpk_puppet}")
-        raise typer.Exit(1)
+    puppet_bin = _resolve_puppet_bin(resolved_path)
 
     cmd = [
         str(puppet_bin),
@@ -905,6 +1339,9 @@ def apply(
         str(puppet_dir),
         "--environment",
         "production",
+        # Without this puppet exits 0 on every "noop with changes" or
+        # resource failure, masking real problems. See exit-code mapping below.
+        "--detailed-exitcodes",
         str(site_pp),
     ]
 
@@ -914,68 +1351,96 @@ def apply(
     if debug:
         cmd.append("--debug")
 
-    # Load config for defaults
+    # Resolve output mode early so the preamble can be replaced with a
+    # single header line in summary mode.
+    summary_counters: dict = {"warnings": 0, "notices": 0}
+    if summary and (verbose or debug):
+        # --verbose/--debug exist to show everything; honor them and ignore
+        # --summary rather than failing the run.
+        print_warning("--summary ignored when --verbose or --debug is set")
+        summary_active = False
+    else:
+        summary_active = summary
+
+    # Load config and read server.yaml (Facter external facts).
     config = get_config()
-    ops = config.ops
-
-    # Apply config defaults for unspecified options
-    defaulted = []
-    if not env and ops.environment_name:
-        env = ops.environment_name
-        defaulted.append(f"env={env}")
-    if not tier and ops.tier:
-        tier = ops.tier
-        defaulted.append(f"tier={tier}")
-    if not pillar and ops.pillar:
-        pillar = ops.pillar
-        defaulted.append(f"pillar={pillar}")
-    if not zone and ops.zone:
-        zone = ops.zone
-        defaulted.append(f"zone={zone}")
-    if not role and ops.ps_role:
-        role = ops.ps_role
-        defaulted.append(f"role={role}")
-
-    # Show warning for defaulted values (print_warning is verbosity-aware)
-    if defaulted and not ops.suppress_fact_warnings:
+    server_facts = _read_server_facts(config)
+    facter_env, defaulted = _build_facter_env(
+        config, server_facts,
+        env=env, tier=tier, pillar=pillar, zone=zone, role=role,
+        quiet=summary_active,
+    )
+    if defaulted and not config.ops.suppress_fact_warnings:
         print_warning(f"Using config defaults: {', '.join(defaulted)}")
 
-    # Build Facter environment variables
-    facter_env = os.environ.copy()
+    # Role -> class announcement. The "0.03s catalog compile" silent-failure
+    # case usually reduces to: ps_role didn't match any case in site.pp, so
+    # nothing was included.
+    effective_role = role or server_facts.get("ps_role") or config.ops.ps_role
+    if effective_role:
+        cls = ROLE_CLASS_MAP.get(effective_role)
+        if cls:
+            if not summary_active:
+                print_info(f"Resolved ps_role={effective_role} -> {cls}")
+        else:
+            print_warning(
+                f"ps_role={effective_role!r} does not match any class in site.pp "
+                f"(known: {', '.join(ROLE_CLASS_MAP)}). Catalog will be empty."
+            )
+    else:
+        print_warning(
+            "ps_role is not set (no --role, no server.yaml, no config default). "
+            "Catalog will be empty."
+        )
 
-    if env:
-        facter_env["FACTER_env"] = env
-        print_info(f"Setting fact: env={env}")
-    if tier:
-        facter_env["FACTER_ps_tier"] = tier
-        print_info(f"Setting fact: ps_tier={tier}")
-    if pillar:
-        facter_env["FACTER_ps_pillar"] = pillar
-        print_info(f"Setting fact: ps_pillar={pillar}")
-    if zone:
-        facter_env["FACTER_ps_zone"] = zone
-        print_info(f"Setting fact: ps_zone={zone}")
-    if role:
-        facter_env["FACTER_ps_role"] = role
-        print_info(f"Setting fact: ps_role={role}")
+    cmd, run_env = _wrap_with_sudo(cmd, facter_env, config)
 
-    print_info(f"Running: {' '.join(cmd)}")
+    if summary_active:
+        # Replace the multi-line preamble with a single visually-distinct
+        # header so the user can see at a glance what's about to apply.
+        parts = []
+        env_v = env or server_facts.get("env") or config.ops.environment_name
+        role_v = effective_role
+        tier_v = tier or server_facts.get("ps_tier") or config.ops.tier
+        if env_v:
+            parts.append(f"env={env_v}")
+        if tier_v:
+            parts.append(f"tier={tier_v}")
+        if role_v:
+            cls_label = ROLE_CLASS_MAP.get(role_v)
+            parts.append(f"role={role_v}" + (f" ({cls_label})" if cls_label else ""))
+        title = "[bold cyan]Applying DPK[/bold cyan]"
+        if dry_run:
+            title += " [yellow](dry-run)[/yellow]"
+        if parts:
+            title += " · " + " · ".join(parts)
+        console.rule(title)
+    else:
+        print_info(f"Running: {' '.join(cmd)}")
+
+    # Puppet emits Warning/Notice/Error to stderr; filter both streams in
+    # summary mode (shared counters) so suppression is symmetric. Default
+    # mode keeps current behavior: filter stdout only, stderr verbatim.
+    if verbose:
+        stdout_filter = None
+        stderr_filter = None
+    elif summary_active:
+        summary_filter = lambda line: _puppet_summary_filter(line, summary_counters)
+        stdout_filter = summary_filter
+        stderr_filter = summary_filter
+    else:
+        stdout_filter = _puppet_default_filter
+        stderr_filter = None
 
     try:
-        result = subprocess.run(
+        rc, stdout_text, stderr_text = stream_subprocess(
             cmd,
-            capture_output=False,
-            timeout=3600,
             cwd=puppet_dir,
-            env=facter_env,
+            env=run_env,
+            timeout=3600,
+            stdout_filter=stdout_filter,
+            stderr_filter=stderr_filter,
         )
-        if result.returncode == 0:
-            print_success("Puppet apply completed successfully")
-        elif result.returncode == 2:
-            print_success("Puppet apply completed with changes")
-        else:
-            print_error(f"Puppet apply failed (exit {result.returncode})")
-            raise typer.Exit(1)
     except subprocess.TimeoutExpired:
         print_error("Puppet apply timed out (>1 hour)")
         raise typer.Exit(1)
@@ -983,77 +1448,436 @@ def apply(
         print_error("Puppet not found. Run 'psa dpk setup' first")
         raise typer.Exit(1)
 
+    _emit_catalog_diagnostics(stdout_text, rc, dry_run)
+    if summary_active:
+        _emit_summary_block(summary_counters)
+
+    # Stderr-error scan trumps exit code. Puppet --noop with --detailed-exitcodes
+    # has been observed to exit 0 even when catalog compilation hits errors
+    # like missing Hiera keys; the error appears on stderr but the resource-state
+    # exit code says "no changes". Search for known fatal patterns and override.
+    stderr_errors = _scan_puppet_errors(stderr_text)
+    if stderr_errors:
+        print_error(
+            f"Puppet apply failed: {len(stderr_errors)} error(s) detected on stderr "
+            f"(exit {rc} ignored)"
+        )
+        raise typer.Exit(1)
+
+    if rc == 0:
+        print_success("Puppet apply: no changes needed")
+    elif rc == 2 and dry_run:
+        print_success("Puppet apply: would make changes (dry-run)")
+    elif rc == 2:
+        print_success("Puppet apply: changes applied")
+    elif rc == 4:
+        print_error("Puppet apply completed with resource failures")
+        raise typer.Exit(1)
+    elif rc == 6:
+        print_error("Puppet apply applied changes but had resource failures")
+        raise typer.Exit(1)
+    elif rc == 1:
+        print_error("Puppet apply failed: catalog compilation or parse error")
+        raise typer.Exit(1)
+    else:
+        print_error(f"Puppet apply failed (exit {rc})")
+        raise typer.Exit(rc if rc > 0 else 1)
+
+
+@app.command("lookup")
+def lookup(
+    key: str = typer.Argument(..., help="Hiera key to look up (e.g. oracle_client_version)"),
+    render_as: str = typer.Option(
+        "yaml",
+        "--render-as",
+        help="Output format: yaml | json | s",
+    ),
+    explain: bool = typer.Option(
+        False,
+        "--explain",
+        help="Show the hierarchy walk and which level (if any) matched",
+    ),
+    role: Optional[str] = typer.Option(
+        None, "--role", "-r",
+        help="Set ps_role fact (app, web, prcs, mid, webapp)",
+    ),
+    env: Optional[str] = typer.Option(
+        None, "--env", "-e",
+        help="Set env fact for Hiera lookup (e.g., FSCMDEV)",
+    ),
+    tier: Optional[str] = typer.Option(
+        None, "--tier", "-t",
+        help="Set ps_tier fact for Hiera lookup",
+    ),
+    pillar: Optional[str] = typer.Option(
+        None, "--pillar", "-p",
+        help="Set ps_pillar fact for Hiera lookup",
+    ),
+    zone: Optional[str] = typer.Option(
+        None, "--zone", "-z",
+        help="Set ps_zone fact for Hiera lookup",
+    ),
+    dpk_home: Optional[Path] = typer.Option(
+        None, "--dpk-home",
+        help=f"DPK install dir (or ${ENV_DPK_HOME}, or config.dpk_base/dpk; default {DEFAULT_DPK_HOME})",
+    ),
+) -> None:
+    """
+    Look up a Hiera key using the same facts apply would use.
+
+    Wraps `puppet lookup`. Useful for debugging "why does apply think X is
+    Y?" or "where should I define this missing key?"
+
+    Examples:
+        psa dpk lookup oracle_client_version --env FSCMDEV --role mid
+        psa dpk lookup pia_psserver_list --explain
+        psa dpk lookup db_settings --render-as json
+    """
+    resolved_path = _resolve_dpk_home(dpk_home)
+    puppet_dir = resolved_path / "puppet"
+    if not puppet_dir.exists():
+        print_error(f"DPK puppet directory not found: {puppet_dir}")
+        print_info("Run 'psa dpk setup' first")
+        raise typer.Exit(1)
+
+    puppet_bin = _resolve_puppet_bin(resolved_path)
+
+    config = get_config()
+    server_facts = _read_server_facts(config)
+    facter_env, defaulted = _build_facter_env(
+        config, server_facts,
+        env=env, tier=tier, pillar=pillar, zone=zone, role=role,
+    )
+    if defaulted and not config.ops.suppress_fact_warnings:
+        print_warning(f"Using config defaults: {', '.join(defaulted)}")
+
+    cmd = [
+        str(puppet_bin), "lookup", key,
+        "--confdir", str(puppet_dir),
+        "--environment", "production",
+        "--render-as", render_as,
+    ]
+    if explain:
+        cmd.append("--explain")
+
+    cmd, run_env = _wrap_with_sudo(cmd, facter_env, config)
+    print_info(f"Running: {' '.join(cmd)}")
+
+    try:
+        rc, _, _ = stream_subprocess(
+            cmd, cwd=puppet_dir, env=run_env, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        print_error("Puppet lookup timed out (>2 min)")
+        raise typer.Exit(1)
+    except FileNotFoundError:
+        print_error("Puppet not found. Run 'psa dpk setup' first")
+        raise typer.Exit(1)
+
+    # puppet lookup exits non-zero when the key is undefined; pass through.
+    if rc != 0:
+        raise typer.Exit(rc)
+
+
+# Lines starting with these prefixes are puppet's chatty output. By default
+# we drop them; --verbose passes everything through.
+_PUPPET_QUIET_PREFIXES = ("Info:", "Debug:")
+
+# Puppet wraps lines in ANSI color escapes when stderr is a TTY (and sometimes
+# even when it's not, depending on color config). Strip them before prefix
+# tests so the filters work on color-enabled and color-disabled output alike.
+# We only strip for filter decisions — the original line (with colors) is
+# what gets written to the user's terminal.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(line: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", line)
+
+
+def _puppet_default_filter(line: str) -> bool:
+    return not _strip_ansi(line).lstrip().startswith(_PUPPET_QUIET_PREFIXES)
+
+
+_CATALOG_COMPILE_RE = re.compile(r"Compiled catalog .* in ([\d.]+) seconds")
+_NOTICE_CHANGE_RE = re.compile(r"^Notice: /Stage\[", re.MULTILINE)
+
+# --summary mode: layer additional drops on top of the default filter.
+# Tuned against real DPK apply transcripts.
+_SUMMARY_DROP_WARNING_RES = [
+    re.compile(r"^Warning:.*\bis deprecated\b"),
+    re.compile(r"^Warning:\s*Unknown variable:"),
+    re.compile(r"^Warning:\s*ModuleLoader:"),
+    re.compile(r"^Warning:\s*Undefined variable"),
+]
+# Allow-list for Notices in summary mode. Anything starting with "Notice:"
+# that doesn't match one of these is dropped (and counted).
+_SUMMARY_KEEP_NOTICE_RES = [
+    re.compile(r"^Notice:\s*<DPK"),                    # DPK milestone markers
+    re.compile(r"^Notice:\s*Compiled catalog"),
+    re.compile(r"^Notice:\s*Applied catalog"),
+    re.compile(r"^Notice:\s*Applying (pt|io)_\w+::"),  # top-level role/profile phases
+    re.compile(r"\bfail", re.IGNORECASE),              # any Notice mentioning failure
+]
+# Notify-resource echo lines: puppet emits a `Notice: /Stage[...]/Notify[<msg>]/message:
+# defined 'message' as '<msg>'` immediately after every human-readable `Notice: <msg>`.
+# Pure duplication. Drop silently (don't count) since the info is on screen above.
+_SUMMARY_DROP_ECHO_RES = [
+    # Single-line and opening-line of multi-line echoes.
+    re.compile(r"^Notice:\s*/Stage\[.*?/Notify\["),
+    # Closing line of multi-line echoes (continuation that lands `]/message: defined 'message' as`).
+    re.compile(r"\]/message:\s*defined 'message' as"),
+]
+
+
+_PUPPET_LINE_PREFIXES = ("Notice:", "Warning:", "Error:", "Info:", "Debug:")
+
+
+def _puppet_summary_filter(line: str, counters: dict) -> bool:
+    """Wrap _puppet_default_filter; aggressive Notice/Warning suppression.
+
+    Errors and Tuxedo error context are never dropped. Notice lines are kept
+    only if they match the allow-list (DPK milestones, top-level applies,
+    catalog status, failure context). Notify-message echoes, blank lines,
+    and continuation lines of dropped Notices/Warnings (multi-line value
+    dumps like webserver_settings) are dropped silently. Hidden
+    warnings/notices increment counters for the end-of-run summary.
+    """
+    if not _puppet_default_filter(line):
+        return False
+    stripped = _strip_ansi(line).lstrip()
+
+    # Drop blank/whitespace-only lines (cleans up leftover separators around
+    # dropped notices). Silent — not counted.
+    if not stripped.strip():
+        return False
+
+    has_prefix = any(stripped.startswith(p) for p in _PUPPET_LINE_PREFIXES)
+
+    # Continuation line (no Puppet prefix). Drop if we're suppressing the
+    # rest of a previously-dropped multi-line Notice/Warning. Otherwise keep
+    # — these are Tuxedo error context lines, multi-line milestone content
+    # (e.g. the line after a bare `Notice:`), etc.
+    if not has_prefix:
+        return not counters.get("_suppressing", False)
+
+    # New prefixed line: cancel any in-progress continuation suppression.
+    counters["_suppressing"] = False
+
+    # Echo dedup: silent drop. Set suppression in case a multi-line echo
+    # has continuation lines.
+    if any(p.search(stripped) for p in _SUMMARY_DROP_ECHO_RES):
+        counters["_suppressing"] = True
+        return False
+
+    if stripped.startswith("Warning:"):
+        if any(p.search(stripped) for p in _SUMMARY_DROP_WARNING_RES):
+            counters["warnings"] = counters.get("warnings", 0) + 1
+            counters["_suppressing"] = True
+            return False
+        return True
+
+    if stripped.startswith("Notice:"):
+        if any(p.search(stripped) for p in _SUMMARY_KEEP_NOTICE_RES):
+            return True
+        counters["notices"] = counters.get("notices", 0) + 1
+        # Bare `Notice:` (multi-line milestone opener like `Notice:\n<DPKUSERS>...`)
+        # has its content on the next line — don't suppress that continuation.
+        if stripped.rstrip() != "Notice:":
+            counters["_suppressing"] = True
+        return False
+
+    return True
+
+# Patterns whose presence on stderr means the run failed, regardless of the
+# exit code puppet reported. See https://puppet.com/docs/puppet/latest/man/apply.html
+# - puppet --noop with --detailed-exitcodes can exit 0 while emitting these.
+_PUPPET_FATAL_STDERR_RES = [
+    re.compile(r"^Error:", re.MULTILINE),
+    re.compile(r"Function lookup\(\) did not find"),
+    re.compile(r"Could not find class"),
+    re.compile(r"Could not parse"),
+    re.compile(r"Evaluation Error"),
+]
+
+
+def _scan_puppet_errors(stderr_text: str) -> list[str]:
+    """Return stderr lines matching any fatal puppet error pattern."""
+    if not stderr_text:
+        return []
+    matches: list[str] = []
+    for line in stderr_text.splitlines():
+        if any(p.search(line) for p in _PUPPET_FATAL_STDERR_RES):
+            matches.append(line)
+    return matches
+
+
+def _emit_catalog_diagnostics(stdout_text: str, rc: int, dry_run: bool) -> None:
+    """Surface change counts and warn about suspiciously fast compiles."""
+    match = _CATALOG_COMPILE_RE.search(stdout_text)
+    if match:
+        compile_s = float(match.group(1))
+        if compile_s < 0.5 and rc in (0, 2):
+            print_warning(
+                f"Catalog compiled in {compile_s}s - unusually fast; the role "
+                f"class may not have loaded. Check that ps_role matches a class "
+                f"in site.pp and that all required Hiera keys are defined."
+            )
+
+    changes = len(_NOTICE_CHANGE_RE.findall(stdout_text))
+    if changes:
+        verb = "Would change" if dry_run else "Changed"
+        print_info(f"{verb}: {changes} resources")
+
+
+def _emit_summary_block(counters: dict) -> None:
+    """Print one-line summary of what --summary mode hid. Skips when zero."""
+    warnings = counters.get("warnings", 0)
+    notices = counters.get("notices", 0)
+    if not (warnings or notices):
+        return
+    parts = []
+    if warnings:
+        parts.append(f"{warnings} warnings hidden")
+    if notices:
+        parts.append(f"{notices} notices hidden")
+    print_info(
+        "Summary: " + " • ".join(parts) + " (re-run with --verbose for full output)"
+    )
+
+
+def _detect_os_major_version() -> Optional[int]:
+    """Parse the major VERSION_ID from /etc/os-release. Returns int or None."""
+    try:
+        text = Path(OS_RELEASE_PATH).read_text()
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if line.startswith("VERSION_ID="):
+            value = line.split("=", 1)[1].strip().strip('"').strip("'")
+            try:
+                return int(value.split(".")[0])
+            except (ValueError, IndexError):
+                return None
+    return None
+
+
+def _find_lib(name: str) -> Optional[Path]:
+    """Return the path to a system library if found in any LIB_SEARCH_DIRS."""
+    for d in LIB_SEARCH_DIRS:
+        p = Path(d) / name
+        if p.exists():
+            return p
+    return None
+
+
+def _sudo_prefix() -> List[str]:
+    return [] if os.geteuid() == 0 else ["sudo"]
+
+
+def _plan_ncurses_fix(
+    missing: List[str], os_major: Optional[int]
+) -> List[FixAction]:
+    """Plan fix actions for missing ncurses .5 libs based on OS version."""
+    if not missing:
+        return []
+
+    # EL 7/8 (or unknown): ncurses-compat-libs covers all .5 libs in one shot
+    if os_major is None or os_major < 9:
+        cmd = _sudo_prefix() + ["dnf", "install", "-y", "ncurses-compat-libs"]
+        return [FixAction("Install ncurses-compat-libs", cmd)]
+
+    # EL 9+: per-lib symlink to the .6 from ncurses-libs
+    actions: List[FixAction] = []
+    needs_libs = any(
+        _find_lib(name.replace(".so.5", ".so.6")) is None for name in missing
+    )
+    if needs_libs:
+        cmd = _sudo_prefix() + ["dnf", "install", "-y", "ncurses-libs"]
+        actions.append(FixAction("Install ncurses-libs (provides .6 libs)", cmd))
+
+    for name in missing:
+        target_name = name.replace(".so.5", ".so.6")
+        target = _find_lib(target_name) or Path("/usr/lib64") / target_name
+        link = target.parent / name
+        cmd = _sudo_prefix() + ["ln", "-s", str(target), str(link)]
+        actions.append(FixAction(f"Symlink {name} -> {target.name}", cmd))
+
+    return actions
+
 
 def _check_dpk_prerequisites(
     deploy_type: DeployType = DeployType.all, fix: bool = False
 ) -> None:
-    """Check DPK prerequisites are installed. Optionally auto-install missing packages."""
-    missing = []
-    install_pkgs = []
+    """Check DPK prerequisites; with --fix, install/symlink missing libs.
 
-    # Check for ncurses library (required by DPK bundled Python/Ruby)
-    ncurses_found = False
-    for lib_path in DPK_REQUIRED_LIBS:
-        if Path(lib_path).exists():
-            ncurses_found = True
-            break
+    On EL 9+ the .5 ncurses libs are not packaged; falls back to symlinking
+    the existing .6 libs (from ncurses-libs). On EL 7/8 installs ncurses-compat-libs.
+    """
+    os_major = _detect_os_major_version()
 
-    if not ncurses_found:
-        missing.append("libncursesw.so.5")
-        install_pkgs.append("ncurses-compat-libs")
+    missing_ncurses = [n for n in NCURSES_LIB_NAMES if _find_lib(n) is None]
 
-    # Check Tuxedo/OUI libs if installing middleware
+    missing_tuxedo: List[str] = []
     if deploy_type != DeployType.tools_home:
         for lib_name, lib_paths in TUXEDO_REQUIRED_LIBS.items():
-            lib_found = False
-            for lib_path in lib_paths:
-                if Path(lib_path).exists():
-                    lib_found = True
-                    break
-            if not lib_found:
-                missing.append(lib_name)
-                pkg_map = {"libaio.so.1": "libaio", "libnsl.so.1": "libnsl"}
-                if lib_name in pkg_map:
-                    install_pkgs.append(pkg_map[lib_name])
+            if not any(Path(p).exists() for p in lib_paths):
+                missing_tuxedo.append(lib_name)
 
-    if missing:
-        print_error("Missing DPK prerequisites:")
-        for lib in missing:
-            console.print(f"  [red]✗[/red] {lib}")
-        console.print()
+    if not missing_ncurses and not missing_tuxedo:
+        print_success("DPK prerequisites OK")
+        return
 
-        if install_pkgs:
-            dnf_cmd = ["dnf", "install", "-y"] + install_pkgs
-            if os.geteuid() != 0:
-                dnf_cmd = ["sudo"] + dnf_cmd
+    print_error("Missing DPK prerequisites:")
+    for lib in missing_ncurses:
+        console.print(f"  [red]✗[/red] {lib}")
+    for lib in missing_tuxedo:
+        console.print(f"  [red]✗[/red] {lib}")
+    console.print()
 
-            should_install = fix
-            if not fix:
-                print_info(f"Install command: {' '.join(dnf_cmd)}")
-                should_install = typer.confirm("Install missing packages?")
+    ncurses_actions = _plan_ncurses_fix(missing_ncurses, os_major)
+    if ncurses_actions and os_major is not None and os_major >= 9:
+        print_info(
+            f"On EL {os_major}+, ncurses-compat-libs is not packaged; "
+            "fix uses symlinks to existing .6 libs."
+        )
 
-            if should_install:
-                print_info(f"Running: {' '.join(dnf_cmd)}")
-                result = subprocess.run(dnf_cmd)
-                if result.returncode != 0:
-                    print_error("Package install failed")
-                    raise typer.Exit(1)
-                print_success("Prerequisites installed")
-                return
-            else:
-                raise typer.Exit(1)
+    if ncurses_actions:
+        print_info("Fix plan:")
+        for action in ncurses_actions:
+            console.print(f"  [cyan]{' '.join(action.command)}[/cyan]")
 
-        # Additional guidance for OUI/middleware installs
-        if deploy_type != DeployType.tools_home:
-            console.print()
-            print_warning("Oracle Universal Installer (OUI) may require additional dependencies")
-            print_info("For Oracle Linux/RHEL 8+, consider:")
-            print_info("  dnf install oracle-database-preinstall-19c")
-            print_info("Or check Oracle Support Doc 2617023.1 for PeopleTools prerequisites")
+    pkg_map = {"libaio.so.1": "libaio", "libnsl.so.1": "libnsl"}
+    tuxedo_pkgs = [pkg_map[n] for n in missing_tuxedo if n in pkg_map]
+    tuxedo_cmd: Optional[List[str]] = None
+    if tuxedo_pkgs:
+        tuxedo_cmd = _sudo_prefix() + ["dnf", "install", "-y"] + tuxedo_pkgs
+        print_info(f"Install command: [cyan]{' '.join(tuxedo_cmd)}[/cyan]")
 
+    console.print()
+    should_fix = fix
+    if not fix:
+        should_fix = typer.confirm("Apply fixes?")
+
+    if not should_fix:
         raise typer.Exit(1)
 
-    print_success("DPK prerequisites OK")
+    for action in ncurses_actions:
+        print_info(f"Running: {' '.join(action.command)}")
+        result = subprocess.run(action.command)
+        if result.returncode != 0:
+            print_error(f"Failed: {action.description}")
+            print_info(f"Run manually: {' '.join(action.command)}")
+            raise typer.Exit(1)
+
+    if tuxedo_cmd:
+        print_info(f"Running: {' '.join(tuxedo_cmd)}")
+        result = subprocess.run(tuxedo_cmd)
+        if result.returncode != 0:
+            print_error("Package install failed")
+            raise typer.Exit(1)
+
+    print_success("Prerequisites installed")
 
 
 def _parse_manifest(manifest_path: Path) -> dict:
@@ -1071,7 +1895,7 @@ def _verify_puppet(exit_on_fail: bool = True, quiet: bool = False) -> Union[bool
 
     When quiet=True, suppress prints and return a dict instead of bool.
     """
-    dpk_base = Path(os.environ.get(ENV_DPK_BASE, DEFAULT_DPK_BASE))
+    dpk_base = _get_env_path(ENV_DPK_BASE, None) or Path(DEFAULT_DPK_BASE)
     puppet_bin = dpk_base / "psft_puppet_agent" / "bin" / "puppet"
 
     if puppet_bin.exists():
@@ -1105,30 +1929,50 @@ def _verify_puppet(exit_on_fail: bool = True, quiet: bool = False) -> Union[bool
 # --- Helper functions for sync command ---
 
 
-def _get_source_path(source: Optional[Path]) -> Path:
-    """Resolve source path from CLI arg, PSA_KIT env, config, or package location."""
-    if source:
-        return source.resolve()
+def _default_fileops() -> SudoFileOps:
+    """Direct-mode SudoFileOps for callers (e.g. tests) that don't inject one."""
+    return SudoFileOps(PsaConfig(sudo_enabled=False))
 
-    # Check PSA_KIT environment variable
-    psa_kit = os.environ.get("PSA_KIT")
-    if psa_kit:
-        return Path(psa_kit)
 
-    # Check config
-    config = get_config()
-    if config.psa_kit_path:
-        return config.psa_kit_path
+def _write_with_escalation(path: Path, content: str, fileops: SudoFileOps) -> bool:
+    """Try writing as runtime_user, then escalate to root.
 
-    # Fall back to package location (relative to this file)
-    return Path(__file__).resolve().parent.parent.parent.parent.parent
+    DPK_HOME is often root-owned (Oracle's psft-dpk-setup.sh runs as root),
+    in which case sudo'ing as runtime_user (psadm2) still can't write. Fall
+    back to `sudo bash -c` for those cases.
+    """
+    if fileops.write_text(path, content):
+        return True
+    return fileops.write_text(path, content, as_root=True)
+
+
+def _backup_and_write(
+    target: Path, content: str, fileops: SudoFileOps
+) -> bool:
+    """Back up `target` to .bak (if it exists) then write `content`. Sudo-aware."""
+    backup = target.with_suffix(target.suffix + ".bak")
+    existing = fileops.read_text(target)
+    if existing is not None:
+        if not _write_with_escalation(backup, existing, fileops):
+            print_error(f"Failed to back up {target} -> {backup}")
+            if getattr(fileops, "last_error", None):
+                print_info(fileops.last_error)
+            return False
+    if not _write_with_escalation(target, content, fileops):
+        print_error(f"Failed to write {target}")
+        if getattr(fileops, "last_error", None):
+            print_info(fileops.last_error)
+        return False
+    return True
 
 
 def _deploy_hiera_files(
     dpk_path: Path,
-    psa_cust_path: Optional[Path] = None,
+    dpk_cust_home: Optional[Path] = None,
     psa_kit_path: Optional[Path] = None,
     dry_run: bool = False,
+    enable_psa_kit: bool = False,
+    fileops: Optional[SudoFileOps] = None,
 ) -> bool:
     """Deploy hiera.yaml to puppet directories. Returns True on success."""
     puppet_dir = dpk_path / "puppet"
@@ -1136,7 +1980,12 @@ def _deploy_hiera_files(
         print_error(f"Puppet directory not found: {puppet_dir}")
         return False
 
-    hiera_content = _generate_hiera_yaml(psa_cust_path, psa_kit_path)
+    if fileops is None:
+        fileops = _default_fileops()
+
+    hiera_content = _generate_hiera_yaml(
+        dpk_cust_home, psa_kit_path, enable_psa_kit, dpk_home=dpk_path,
+    )
 
     targets = [
         puppet_dir / "hiera.yaml",
@@ -1148,163 +1997,120 @@ def _deploy_hiera_files(
         if not target_dir.exists():
             continue
 
-        backup = target.with_suffix(".yaml.bak")
-
         if dry_run:
             if target.exists():
                 console.print(f"  [dim]Would backup: {target.name}[/dim]")
             console.print(f"  [dim]Would write: {target}[/dim]")
         else:
-            if target.exists():
-                shutil.copy2(target, backup)
-            target.write_text(hiera_content)
+            if not _backup_and_write(target, hiera_content, fileops):
+                return False
             print_success(f"  hiera.yaml -> {target.parent.name}/")
 
     return True
 
 
-def _deploy_site_pp(dpk_path: Path, dry_run: bool = False) -> bool:
+def _deploy_site_pp(
+    dpk_path: Path,
+    dry_run: bool = False,
+    fileops: Optional[SudoFileOps] = None,
+) -> bool:
     """Deploy site.pp to manifests directory. Returns True on success."""
     manifests_dir = dpk_path / "puppet" / "production" / "manifests"
     if not manifests_dir.exists():
         print_error(f"Manifests directory not found: {manifests_dir}")
         return False
 
+    if fileops is None:
+        fileops = _default_fileops()
+
     target = manifests_dir / "site.pp"
-    backup = target.with_suffix(".pp.bak")
 
     if dry_run:
         if target.exists():
             console.print(f"  [dim]Would backup: {target.name}[/dim]")
         console.print(f"  [dim]Would write: {target}[/dim]")
     else:
-        if target.exists():
-            shutil.copy2(target, backup)
-        target.write_text(SITE_PP_TEMPLATE)
+        if not _backup_and_write(target, SITE_PP_TEMPLATE, fileops):
+            return False
         print_success("  site.pp -> manifests/")
 
     return True
 
 
-def _generate_puppet_conf(
-    psa_cust_path: Optional[Path],
+def _generate_environment_conf(
+    dpk_cust_home: Optional[Path],
     psa_kit_path: Optional[Path],
     dpk_base_path: Path,
+    enable_psa_kit: bool = False,
 ) -> str:
-    """Generate puppet.conf with 3-tier modulepath: CUST:KIT:DPK modules."""
+    """Generate environment.conf for the production Puppet directory environment.
+
+    modulepath: DPK_CUST_HOME/modules : [KIT modules :] DPK/puppet/production/modules
+    Kit segment only when enable_psa_kit=True.
+    """
     dpk_modules = str(dpk_base_path / "puppet" / "production" / "modules")
 
     parts = []
-    if psa_cust_path:
-        parts.append(str(psa_cust_path / "dpk" / "puppet" / "production" / "modules"))
-    if psa_kit_path:
+    if dpk_cust_home:
+        parts.append(str(dpk_cust_home / "modules"))
+    if enable_psa_kit and psa_kit_path:
         parts.append(str(psa_kit_path / "dpk" / "puppet" / "production" / "modules"))
     parts.append(dpk_modules)
 
     modulepath = ":".join(parts)
 
     return (
-        "[main]\n"
-        f"  environmentpath = {dpk_base_path / 'puppet'}\n"
-        f"  confdir = {dpk_base_path / 'puppet'}\n"
-        "\n"
-        "[agent]\n"
-        f"  environment = production\n"
-        "\n"
-        "[user]\n"
-        f"  environment = production\n"
-        f"  modulepath = {modulepath}\n"
+        f"modulepath = {modulepath}\n"
+        "manifest = manifests/site.pp\n"
+        "environment_timeout = unlimited\n"
     )
 
 
-def _deploy_puppet_conf(
+def _deploy_environment_conf(
     dpk_path: Path,
-    psa_cust_path: Optional[Path] = None,
+    dpk_cust_home: Optional[Path] = None,
     psa_kit_path: Optional[Path] = None,
     dry_run: bool = False,
+    enable_psa_kit: bool = False,
+    fileops: Optional[SudoFileOps] = None,
 ) -> bool:
-    """Deploy puppet.conf to puppet directory. Returns True on success."""
-    puppet_dir = dpk_path / "puppet"
-    if not puppet_dir.exists():
-        print_error(f"Puppet directory not found: {puppet_dir}")
+    """Deploy environment.conf to the production env dir. Returns True on success."""
+    env_dir = dpk_path / "puppet" / "production"
+    if not env_dir.exists():
+        print_error(f"Puppet environment directory not found: {env_dir}")
         return False
 
-    target = puppet_dir / "puppet.conf"
-    backup = target.with_suffix(".conf.bak")
-    content = _generate_puppet_conf(psa_cust_path, psa_kit_path, dpk_path)
+    if fileops is None:
+        fileops = _default_fileops()
+
+    target = env_dir / "environment.conf"
+    content = _generate_environment_conf(dpk_cust_home, psa_kit_path, dpk_path, enable_psa_kit)
 
     if dry_run:
         if target.exists():
             console.print(f"  [dim]Would backup: {target.name}[/dim]")
         console.print(f"  [dim]Would write: {target}[/dim]")
     else:
-        if target.exists():
-            shutil.copy2(target, backup)
-        target.write_text(content)
-        print_success(f"  puppet.conf -> {puppet_dir.name}/")
+        if not _backup_and_write(target, content, fileops):
+            return False
+        print_success(f"  environment.conf -> {env_dir.relative_to(dpk_path)}/")
 
     return True
 
 
-def _deploy_module_files(
-    dpk_path: Path, source_path: Path, dry_run: bool = False
-) -> bool:
-    """Deploy io_profile and io_role modules. Returns True on success."""
-    modules_dir = dpk_path / "puppet" / "production" / "modules"
-    if not modules_dir.exists():
-        print_error(f"Modules directory not found: {modules_dir}")
-        return False
-
-    source_modules = source_path / "dpk" / "puppet" / "production" / "modules"
-    if not source_modules.exists():
-        print_error(f"Source modules not found: {source_modules}")
-        return False
-
-    module_names = sorted(
-        d.name
-        for d in source_modules.iterdir()
-        if d.is_dir() and d.name.startswith("io_")
-    )
-    deployed = 0
-
-    for module_name in module_names:
-        source = source_modules / module_name
-        target = modules_dir / module_name
-        backup = modules_dir / f"{module_name}.bak"
-
-        if not source.exists():
-            print_warning(f"  Source module not found: {module_name}")
-            continue
-
-        if dry_run:
-            if target.exists():
-                console.print(f"  [dim]Would backup: {module_name}[/dim]")
-            console.print(f"  [dim]Would copy: {module_name}/[/dim]")
-        else:
-            if target.exists():
-                if backup.exists():
-                    shutil.rmtree(backup)
-                shutil.move(str(target), str(backup))
-            shutil.copytree(source, target)
-            print_success(f"  {module_name}/ -> modules/")
-            deployed += 1
-
-    return deployed > 0 or dry_run
-
-
 @app.command("sync")
 def sync(
-    dpk_path: Optional[Path] = typer.Option(
+    dpk_home: Optional[Path] = typer.Option(
         None,
-        "--dpk-path",
+        "--dpk-home",
         "-d",
-        help=f"DPK directory (or ${ENV_DPK_BASE}/dpk)",
+        help=f"DPK install dir (or ${ENV_DPK_HOME}, or config.dpk_base/dpk; default {DEFAULT_DPK_HOME})",
     ),
-    source: Optional[Path] = typer.Option(
+    dpk_cust_home: Optional[Path] = typer.Option(
         None,
-        "--source",
-        "-s",
-        help="Source path (or $PSA_KIT)",
+        "--dpk-cust-home",
+        "-c",
+        help="DPK_CUST_HOME (or $DPK_CUST_HOME, or config.dpk_cust_home)",
     ),
     do_hiera: bool = typer.Option(
         False,
@@ -1316,31 +2122,29 @@ def sync(
         "--site",
         help="Sync site.pp only (default: sync all)",
     ),
-    do_modules: bool = typer.Option(
+    do_environment_conf: bool = typer.Option(
         False,
-        "--modules",
-        help="Sync custom modules only (default: sync all)",
-    ),
-    do_puppet_conf: bool = typer.Option(
-        False,
-        "--puppet-conf",
-        help="Sync puppet.conf only (default: sync all)",
+        "--environment-conf",
+        help="Sync environment.conf only (default: sync all)",
     ),
     sync_data: bool = typer.Option(
         False,
         "--data",
+        hidden=True,
         help="Sync Hiera data from PSA-OPS (replaces 'psa dpk data sync')",
     ),
     tier: Optional[str] = typer.Option(
         None,
         "--tier",
         "-t",
+        hidden=True,
         help="Tier for data sync (with --data)",
     ),
     environments: Optional[str] = typer.Option(
         None,
         "--environments",
         "-e",
+        hidden=True,
         help="Environments for data sync, comma-separated (with --data)",
     ),
     dry_run: bool = typer.Option(
@@ -1351,55 +2155,50 @@ def sync(
     ),
 ) -> None:
     """
-    Sync custom DPK files to local installation
+    Refresh generated config files in DPK_HOME so Puppet picks up DPK_CUST_HOME.
 
-    Deploys hiera.yaml, site.pp, and io_profile/io_role modules in one command.
-    Use --hiera, --site, or --modules to sync only specific components.
-    Use --data to sync Hiera data from PSA-OPS (replaces 'psa dpk data sync').
+    Writes hiera.yaml, site.pp, and environment.conf into DPK_HOME/puppet/.
+    Modules are no longer copied here — install them into DPK_CUST_HOME/modules/
+    via 'psa dpk module install'; environment.conf points Puppet's modulepath there.
+
+    Requires 'psa dpk init' to have been run (config.dpk_cust_home must be set).
 
     Examples:
-        psa dpk sync --dpk-path /opt/oracle/psft/dpk
+        psa dpk sync --dpk-home /opt/oracle/psft/dpk
         psa dpk sync --hiera --site
-        psa dpk sync --data --tier nonprod
         psa dpk sync --dry-run
+        psa dpk sync --dpk-cust-home /u01/app/psa/dpk
     """
     # If none of the filter flags specified, sync all
-    sync_all = not (do_hiera or do_site or do_modules or do_puppet_conf)
+    sync_all = not (do_hiera or do_site or do_environment_conf)
 
-    # Resolve DPK path
-    resolved_dpk = _get_env_path(ENV_DPK_BASE, dpk_path)
-    if not resolved_dpk:
-        resolved_dpk = Path(DEFAULT_DPK_BASE)
-
-    # Handle both /u01/app/psoft and /u01/app/psoft/dpk
-    if resolved_dpk.name != "dpk" and (resolved_dpk / "dpk").exists():
-        resolved_dpk = resolved_dpk / "dpk"
-
+    # Resolve DPK_HOME (the dpk install dir)
+    resolved_dpk = _resolve_dpk_home(dpk_home)
     if not resolved_dpk.exists():
-        print_error(f"DPK path not found: {resolved_dpk}")
+        print_error(f"DPK_HOME not found: {resolved_dpk}")
+        print_info(f"Set --dpk-home, ${ENV_DPK_HOME}, or config.dpk_base.")
         raise typer.Exit(1)
 
-    # Resolve source path
-    resolved_source = _get_source_path(source)
-    if not resolved_source.exists():
-        print_error(f"Source path not found: {resolved_source}")
-        raise typer.Exit(1)
-
-    # Resolve psa_cust_path and psa_kit_path for hiera/puppet.conf generation
+    # Resolve dpk_cust_home (required): flag -> env -> config
     config = get_config()
-    resolved_cust = (
-        Path(os.environ["PSA_CUST"]) if os.environ.get("PSA_CUST")
-        else config.psa_cust_path
-    )
+    if dpk_cust_home:
+        resolved_cust = dpk_cust_home.resolve()
+    elif env_cust := os.environ.get("DPK_CUST_HOME"):
+        resolved_cust = Path(env_cust)
+    else:
+        resolved_cust = config.dpk_cust_home
+    if not resolved_cust:
+        print_error("DPK_CUST_HOME not configured.")
+        print_info("Run 'psa dpk init' first, set --dpk-cust-home, or set $DPK_CUST_HOME.")
+        raise typer.Exit(1)
+
     resolved_kit = (
         Path(os.environ["PSA_KIT"]) if os.environ.get("PSA_KIT")
         else config.psa_kit_path
     )
 
-    print_info(f"DPK path: {resolved_dpk}")
-    print_info(f"Source: {resolved_source}")
-    if resolved_cust:
-        print_info(f"PSA Cust: {resolved_cust}")
+    print_info(f"DPK_HOME: {resolved_dpk}")
+    print_info(f"DPK_CUST_HOME: {resolved_cust}")
     if resolved_kit:
         print_info(f"PSA Kit: {resolved_kit}")
     console.print()
@@ -1410,24 +2209,30 @@ def sync(
 
     console.print("[bold]Syncing custom DPK configuration...[/bold]")
 
+    # DPK_HOME is typically owned by runtime_user (psadm2); use sudo if needed.
+    fileops = SudoFileOps(config)
+
     # Deploy hiera.yaml
     if sync_all or do_hiera:
-        if not _deploy_hiera_files(resolved_dpk, resolved_cust, resolved_kit, dry_run):
+        if not _deploy_hiera_files(
+            resolved_dpk, resolved_cust, resolved_kit, dry_run,
+            enable_psa_kit=config.enable_psa_kit,
+            fileops=fileops,
+        ):
             raise typer.Exit(1)
 
     # Deploy site.pp
     if sync_all or do_site:
-        if not _deploy_site_pp(resolved_dpk, dry_run):
+        if not _deploy_site_pp(resolved_dpk, dry_run, fileops=fileops):
             raise typer.Exit(1)
 
-    # Deploy puppet.conf
-    if sync_all or do_puppet_conf:
-        if not _deploy_puppet_conf(resolved_dpk, resolved_cust, resolved_kit, dry_run):
-            raise typer.Exit(1)
-
-    # Deploy modules
-    if sync_all or do_modules:
-        if not _deploy_module_files(resolved_dpk, resolved_source, dry_run):
+    # Deploy environment.conf
+    if sync_all or do_environment_conf:
+        if not _deploy_environment_conf(
+            resolved_dpk, resolved_cust, resolved_kit, dry_run,
+            enable_psa_kit=config.enable_psa_kit,
+            fileops=fileops,
+        ):
             raise typer.Exit(1)
 
     # Optionally sync OPS data

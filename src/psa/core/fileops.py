@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import subprocess
 from pathlib import Path
@@ -93,6 +94,63 @@ class SudoFileOps:
             return result.stdout
         except Exception:
             return None
+
+    def write_text(self, path: Path, content: str, *, as_root: bool = False) -> bool:
+        """Write text to a file. Returns True on success.
+
+        Tries a direct write first. If that fails with a permission error, falls
+        back to sudo: as `sudo su - <runtime_user>` by default, or as
+        `sudo bash -c` when as_root=True (needed for root-owned paths such as
+        Puppet's facts.d/). Content is base64-encoded over the wire to avoid
+        shell-escaping pitfalls.
+
+        On failure, populates `self.last_error` with a diagnostic string the
+        caller can surface to the user.
+        """
+        self.last_error: Optional[str] = None
+
+        # Try direct write first when we don't already know sudo is required.
+        if as_root or not self._needs_sudo():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+                return True
+            except (PermissionError, OSError) as e:
+                if not as_root and not self._needs_sudo():
+                    # No elevation requested and direct failed — give up.
+                    self.last_error = f"direct write failed: {e}"
+                    return False
+                # Fall through to sudo path
+
+        b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        inner = f"mkdir -p {path.parent} && echo {b64} | base64 -d > {path}"
+
+        if as_root:
+            full_cmd = ["sudo", "bash", "-c", inner]
+        else:
+            full_cmd = ["sudo", "su", "-", self.config.runtime_user, "-c", inner]
+
+        try:
+            result = subprocess.run(
+                full_cmd, capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                return True
+            stderr = (result.stderr or "").strip() or "(no stderr)"
+            self.last_error = (
+                f"sudo write failed (exit {result.returncode}): {stderr}\n"
+                f"  cmd: {' '.join(full_cmd[:5])} ..."
+            )
+            return False
+        except subprocess.TimeoutExpired:
+            self.last_error = (
+                "sudo write timed out after 30s — likely waiting for a password prompt. "
+                "Configure passwordless sudo for the runtime user."
+            )
+            return False
+        except Exception as e:
+            self.last_error = f"sudo invocation failed: {e}"
+            return False
 
     def stat_size(self, path: Path) -> Optional[int]:
         """Get file size in bytes."""

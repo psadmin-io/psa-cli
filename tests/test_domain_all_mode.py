@@ -28,8 +28,8 @@ def _make_domain(name, dtype="app"):
 
 APPDOM = _make_domain("APPDOM", "app")
 PRCSDOM = _make_domain("PRCSDOM", "prcs")
-PIADOM = _make_domain("TESTPIA", "pia")
-ALL_DOMAINS = [APPDOM, PRCSDOM, PIADOM]
+WEBDOM = _make_domain("TESTWEB", "web")
+ALL_DOMAINS = [APPDOM, PRCSDOM, WEBDOM]
 
 
 # --- _resolve_targets ---
@@ -70,12 +70,12 @@ class TestResolveTargets:
 
     @patch("psa.commands.domain.get_config")
     @patch("psa.commands.domain.run_discovery")
-    def test_skip_types_filters_pia(self, mock_disc, mock_cfg):
+    def test_skip_types_filters_web(self, mock_disc, mock_cfg):
         mock_cfg.return_value = PsaConfig()
         mock_disc.return_value = ALL_DOMAINS
-        result = _resolve_targets(None, None, skip_types={"pia"})
+        result = _resolve_targets(None, None, skip_types={"web"})
         assert len(result) == 2
-        assert all(d.domain_type != "pia" for d in result)
+        assert all(d.domain_type != "web" for d in result)
 
     @patch("psa.commands.domain.get_config")
     @patch("psa.commands.domain.run_discovery")
@@ -89,9 +89,9 @@ class TestResolveTargets:
     @patch("psa.commands.domain.run_discovery")
     def test_skip_types_all_filtered_exits(self, mock_disc, mock_cfg):
         mock_cfg.return_value = PsaConfig()
-        mock_disc.return_value = [PIADOM]
+        mock_disc.return_value = [WEBDOM]
         with pytest.raises(click.exceptions.Exit):
-            _resolve_targets(None, None, skip_types={"pia"})
+            _resolve_targets(None, None, skip_types={"web"})
 
 
 # --- _confirm_targets ---
@@ -215,23 +215,23 @@ class TestCommandLoops:
     def test_bounce_loops_all(self, mock_exec, mock_get_ex, mock_resolve, mock_confirm):
         from psa.commands.domain import bounce
 
-        mock_resolve.return_value = [APPDOM, PIADOM]
+        mock_resolve.return_value = [APPDOM, WEBDOM]
         mock_get_ex.return_value = MagicMock()
 
         bounce(name=None, serial=False, domain_type=None)
 
         # APPDOM: stop, purge, flush, configure, start = 5
-        # PIADOM: stop, purge, start = 3 (no flush/configure for PIA)
+        # WEBDOM: stop, purge, start = 3 (no flush/configure for web)
         assert mock_exec.call_count == 8
 
     @patch("psa.commands.domain._confirm_targets", return_value=True)
     @patch("psa.commands.domain._resolve_targets")
     @patch("psa.commands.domain._get_executor")
     @patch("psa.commands.domain._execute_domain_command", return_value=OK_RESULT)
-    def test_configure_skips_pia_in_all_mode(self, mock_exec, mock_get_ex, mock_resolve, mock_confirm):
+    def test_configure_skips_web_in_all_mode(self, mock_exec, mock_get_ex, mock_resolve, mock_confirm):
         from psa.commands.domain import configure
 
-        # _resolve_targets would have already filtered PIA via skip_types
+        # _resolve_targets would have already filtered web via skip_types
         mock_resolve.return_value = [APPDOM, PRCSDOM]
         mock_get_ex.return_value = MagicMock()
 
