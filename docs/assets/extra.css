@@ -1,0 +1,15 @@
+/* psadmin.io brand colors (override Material's light-blue + amber defaults
+   with the exact brand hex values from docs/assets/scheme.png). */
+:root {
+  --md-primary-fg-color:        #1E9CF0;
+  --md-primary-fg-color--light: #4DB4F5;
+  --md-primary-fg-color--dark:  #1880C8;
+  --md-accent-fg-color:         #F0AF40;
+}
+
+/* Slightly larger header logo so the wordmark is readable */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 1.6rem;
+  width: auto;
+}
