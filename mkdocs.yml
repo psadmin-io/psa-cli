@@ -8,7 +8,7 @@ copyright: Copyright &copy; 2026 psadmin.io
 
 theme:
   name: material
-  logo: assets/io_full_400.png
+  logo: assets/io_white_400.png
   favicon: assets/io_blue_80.png
   font:
     text: Inter

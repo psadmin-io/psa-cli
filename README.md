@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/io_full_400.png" alt="psadmin.io" width="280">
+  <img src="docs/assets/io_blue_400.png" alt="psadmin.io" width="280">
 </p>
 
 <h1 align="center">psa-cli</h1>

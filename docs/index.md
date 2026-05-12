@@ -48,7 +48,7 @@ hide:
 
 <div class="hero" markdown>
 
-![psadmin.io](assets/io_full_400.png){ width=320 }
+![psadmin.io](assets/io_blue_400.png){ width=320 }
 
 # psa-cli
 
