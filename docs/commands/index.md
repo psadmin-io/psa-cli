@@ -7,13 +7,6 @@ psa is organized into command groups. Each group has a `--help` flag listing its
 | `psa config` | Configure psa: paths, runtime user, defaults | [config](config.md) |
 | `psa domain` | Manage PeopleSoft domains: lifecycle, status, compare | [domain](domain.md) |
 | `psa dpk` | DPK provisioning: stage, setup, init, sync, apply, cleanup | [dpk](dpk.md) |
-| `psa kit` | Custom psadmin.io kit operations (gated) | [kit](kit.md) |
-
-Hidden / internal groups (not for general use):
-
-| Group | Purpose |
-|---|---|
-| `psa ops` | psadmin.io ops API integration (hidden) |
 
 ## Global flags
 

@@ -63,7 +63,6 @@ nav:
       - domain: commands/domain.md
       - dpk: commands/dpk.md
       - config: commands/config.md
-      - kit: commands/kit.md
   - DPK workflow:
       - Provisioning workflow: dpk/provisioning-workflow.md
       - Validation quickstart: dpk/validation-quickstart.md

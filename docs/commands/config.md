@@ -14,7 +14,6 @@ runtime_user: psadm2
 dpk_base: /u01/app/psoft
 dpk_home: /u01/app/psoft/dpk
 dpk_cust_home: /u01/app/psoft/dpk-cust
-enable_psa_kit: false
 ```
 
 ## Subcommands
@@ -42,7 +41,6 @@ enable_psa_kit: false
 - `ps_cfg_home`, `ps_home`, `ps_base`
 - `dpk_base`, `dpk_home`, `dpk_cust_home`
 - `runtime_user`
-- `enable_psa_kit` (boolean, gates the `psa kit` group)
 - ...and any other supported key. See `psa config show` for the full list.
 
 ## Example
