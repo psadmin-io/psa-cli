@@ -23,7 +23,7 @@
 
 ## Documentation
 
-Full docs: **<cli.psadmin.io>** (commands reference, DPK provisioning workflow, configuration guide).
+Full docs: **<https://cli.psadmin.io>** (commands reference, DPK provisioning workflow, configuration guide).
 
 ## Highlights
 
