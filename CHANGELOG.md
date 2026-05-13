@@ -51,7 +51,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `psa config set` for individual config keys (`ps_cfg_home`, `ps_base`, `ps_home`, etc.)
 - `psa config show` groups DPK paths, uppercases path labels
 - `DPK_CUST_HOME` foundation (renamed from `PSA_CUST`)
-- `psa ops setup` moved out of `config` group (hidden by default)
 
 #### Quality / internal
 - Minimum Python bumped to 3.9
@@ -64,15 +63,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `psa cache` and `psa secrets` (stub commands that were never wired into the CLI)
 - `psa domain drift` (replaced by `psa domain compare`)
-- `psa ops register` (folded into `psa ops setup`)
 - `start/stopPIA.sh` shim (now routes through `psadmin -w`)
 - `io_base` config key
 
 ### Known limitations
 
 - **Encrypted password leak in JSON** — `psa domain --json` includes raw config content that contains encrypted password fields (`ConnectPswd`, `OprPswd`, etc). Values are encrypted, not cleartext, but should not appear in piped output. Tracked as issue #23, fix planned for 0.4.
-- **`psa ops` is hidden** — depends on the private psadmin.io ops API; not intended for general public use in this release.
-- **`psa kit` is gated** — requires `enable_psa_kit: true` in config and SSH access to the private `psadmin-io/psa-kit` repository.
 - Tested against **PeopleTools 8.62**; older versions may work but are unverified.
 - No PyPI release yet — install from the GitHub release wheel or from source.
 
