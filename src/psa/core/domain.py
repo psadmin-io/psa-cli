@@ -38,6 +38,17 @@ class DomainInfo:
             "config_files": self.config_files,
         }
 
+    def to_ingest_dict(self) -> dict[str, Any]:
+        """Payload shape for PSA-OPS scan/ingest.
+
+        Excludes ``status`` — discovery's filesystem heuristic is unreliable
+        (never reports ``running``), so sending it on every ingest would
+        clobber ground-truth status pushed by ``psa domain status --report``.
+        """
+        d = self.to_dict()
+        d.pop("status", None)
+        return d
+
 
 class DomainDiscovery:
     """Discover PeopleSoft domains on the system."""

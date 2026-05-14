@@ -164,6 +164,21 @@ class TestOpsRegister:
     @patch("psa.commands.ops.DomainDiscovery")
     @patch("psa.commands.ops.ApiClient")
     @patch("psa.commands.ops.get_config")
+    def test_register_omits_status_from_payload(self, mock_get_config, mock_api_cls, mock_discovery_cls, mock_cache_update, ops_config):
+        """Discovery status is filesystem-heuristic; must not clobber server status on re-ingest."""
+        domain = _mk_domain("APPDOM")
+        domain.status = "stopped"
+        mock_client = _patch_register(mock_get_config, mock_api_cls, mock_discovery_cls, mock_cache_update, ops_config, [domain])
+
+        result = runner.invoke(psa_app, ["ops", "register", "--yes"])
+        assert result.exit_code == 0, result.output
+        sent = mock_client.ingest_scan.call_args.kwargs["domains"]
+        assert "status" not in sent[0]
+
+    @patch("psa.commands.ops.update_cache_from_ingest")
+    @patch("psa.commands.ops.DomainDiscovery")
+    @patch("psa.commands.ops.ApiClient")
+    @patch("psa.commands.ops.get_config")
     def test_register_subset_missing(self, mock_get_config, mock_api_cls, mock_discovery_cls, mock_cache_update, ops_config):
         domains = [_mk_domain("APPDOM")]
         mock_client = _patch_register(mock_get_config, mock_api_cls, mock_discovery_cls, mock_cache_update, ops_config, domains)

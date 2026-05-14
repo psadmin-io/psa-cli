@@ -250,7 +250,7 @@ def _register_domains(
     def _do_ingest() -> dict:
         return client.ingest_scan(
             hostname=hostname,
-            domains=[d.to_dict() for d in domains],
+            domains=[d.to_ingest_dict() for d in domains],
             environment_id=config.ops.environment_id,
         )
 

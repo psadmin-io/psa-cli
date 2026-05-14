@@ -586,7 +586,7 @@ def _compare_domain_ops(
     # Push via ingest
     try:
         hostname = get_hostname()
-        domain_dicts = [domain.to_dict()]
+        domain_dicts = [domain.to_ingest_dict()]
         environment_id = config.ops.environment_id
         result = client.ingest_scan(
             hostname=hostname,
