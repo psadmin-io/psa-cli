@@ -1,4 +1,9 @@
-"""Local cache for domain name → UUID mappings."""
+"""Local cache for domain name → UUID mappings.
+
+Domains can share names across types (e.g. IHDEV/app + IHDEV/prcs), so the
+cache uses composite keys ``"<name>:<type>"`` for type-aware entries. A
+legacy flat ``<name>`` key is still readable for backward-compat.
+"""
 
 from __future__ import annotations
 
@@ -9,8 +14,12 @@ from typing import Optional
 CACHE_PATH = Path.home() / ".config" / "psa" / "domains.json"
 
 
+def _composite_key(name: str, domain_type: Optional[str]) -> str:
+    return f"{name}:{domain_type}" if domain_type else name
+
+
 def load_cache(cache_path: Optional[Path] = None) -> dict:
-    """Load the domain cache. Returns {name: {id, node_id, type}} mapping."""
+    """Load the domain cache."""
     path = cache_path or CACHE_PATH
     if not path.exists():
         return {}
@@ -32,28 +41,57 @@ def save_cache(cache: dict, cache_path: Optional[Path] = None) -> None:
 def update_cache_from_ingest(ingest_result: dict, cache_path: Optional[Path] = None) -> dict:
     """Update cache from a scan/ingest response.
 
-    The ingest endpoint returns a ``domains`` list with ``id``, ``name``,
-    ``domain_type`` etc.  We merge these into the existing cache keyed by
-    domain name.
+    Writes a composite ``name:type`` key per domain so same-named domains
+    with different types coexist. Also writes a flat ``name`` key when the
+    type is unknown so legacy callers still resolve.
     """
     cache = load_cache(cache_path)
     for domain in ingest_result.get("domains", []):
         name = domain.get("name")
         domain_id = domain.get("id")
-        if name and domain_id:
-            cache[name] = {
-                "id": domain_id,
-                "node_id": domain.get("node_id"),
-                "type": domain.get("domain_type"),
-            }
+        if not (name and domain_id):
+            continue
+        domain_type = domain.get("domain_type")
+        entry = {
+            "id": domain_id,
+            "node_id": domain.get("node_id"),
+            "type": domain_type,
+        }
+        cache[_composite_key(name, domain_type)] = entry
+        if not domain_type:
+            cache[name] = entry
     save_cache(cache, cache_path)
     return cache
 
 
-def get_cached_domain_id(name: str, cache_path: Optional[Path] = None) -> Optional[str]:
-    """Look up a cached domain UUID by name. Returns None on cache miss."""
+def get_cached_domain_id(
+    name: str,
+    domain_type: Optional[str] = None,
+    cache_path: Optional[Path] = None,
+) -> Optional[str]:
+    """Look up a cached domain UUID by name (+ optional type).
+
+    Returns None on cache miss or when ``domain_type`` is omitted and
+    multiple typed entries exist for the same name (ambiguous).
+    """
     cache = load_cache(cache_path)
-    entry = cache.get(name)
-    if entry:
-        return entry.get("id")
+
+    if domain_type:
+        entry = cache.get(_composite_key(name, domain_type))
+        if entry:
+            return entry.get("id")
+        # Legacy flat entry whose stored type matches
+        legacy = cache.get(name)
+        if legacy and legacy.get("type") == domain_type:
+            return legacy.get("id")
+        return None
+
+    # No type filter: prefer the flat key, else fall through to typed entries
+    legacy = cache.get(name)
+    if legacy:
+        return legacy.get("id")
+    prefix = f"{name}:"
+    matches = [v for k, v in cache.items() if k.startswith(prefix)]
+    if len(matches) == 1:
+        return matches[0].get("id")
     return None

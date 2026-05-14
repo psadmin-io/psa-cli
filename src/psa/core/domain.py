@@ -27,10 +27,15 @@ class DomainInfo:
     config_files: list = field(default_factory=list)  # raw config file contents
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON output."""
+        """Convert to dictionary for JSON output.
+
+        Emits both ``type`` and ``domain_type`` so consumers using either
+        field name (e.g. PSA-OPS ingest expects ``domain_type``) work.
+        """
         return {
             "name": self.name,
             "type": self.domain_type,
+            "domain_type": self.domain_type,
             "path": str(self.path),
             "ps_cfg_home": str(self.ps_cfg_home) if self.ps_cfg_home else None,
             "status": self.status,

@@ -173,7 +173,7 @@ def status() -> None:
 
 def _resolve_api_domain_id(client: ApiClient, name: str, node_id: Optional[str] = None, domain_type: Optional[str] = None) -> str:
     """Resolve domain name to UUID via cache then PSA-OPS API."""
-    cached = get_cached_domain_id(name)
+    cached = get_cached_domain_id(name, domain_type=domain_type)
     if cached:
         return cached
     domains = client.list_domains(name=name, node_id=node_id)
@@ -187,18 +187,25 @@ def _resolve_api_domain_id(client: ApiClient, name: str, node_id: Optional[str] 
 
 
 def _discover_and_filter(names: Optional[List[str]]) -> List[DomainInfo]:
-    """Run discovery and optionally filter to a subset of domain names."""
+    """Run discovery and optionally filter to a subset of domain names.
+
+    A single name may match multiple DomainInfo entries when the same name
+    exists across types (e.g. IHDEV/app + IHDEV/prcs + IHDEV/web). All
+    matches are returned.
+    """
     config = get_config()
     discovery = DomainDiscovery(config)
     domains = discovery.discover_all()
 
     if names:
-        by_name = {d.name: d for d in domains}
-        missing = [n for n in names if n not in by_name]
+        requested = set(names)
+        matched = [d for d in domains if d.name in requested]
+        found = {d.name for d in matched}
+        missing = [n for n in names if n not in found]
         if missing:
             print_error(f"Domain(s) not found locally: {', '.join(missing)}")
             raise typer.Exit(1)
-        return [by_name[n] for n in names]
+        return matched
 
     return domains
 

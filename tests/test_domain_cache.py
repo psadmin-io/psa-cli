@@ -46,22 +46,18 @@ class TestUpdateCacheFromIngest:
                 {"id": "d2", "name": "PRCSDOM1", "domain_type": "prcs", "node_id": "n1"},
             ]
         }
-        result = update_cache_from_ingest(ingest, cache_file)
-        assert result["APPDOM1"]["id"] == "d1"
-        assert result["PRCSDOM1"]["id"] == "d2"
-
-        # Verify persisted
-        loaded = load_cache(cache_file)
-        assert loaded == result
+        update_cache_from_ingest(ingest, cache_file)
+        assert get_cached_domain_id("APPDOM1", cache_path=cache_file) == "d1"
+        assert get_cached_domain_id("PRCSDOM1", cache_path=cache_file) == "d2"
 
     def test_update_merges_existing(self, tmp_path):
         cache_file = tmp_path / "domains.json"
         save_cache({"OLD": {"id": "old1"}}, cache_file)
 
         ingest = {"domains": [{"id": "new1", "name": "NEW", "domain_type": "app"}]}
-        result = update_cache_from_ingest(ingest, cache_file)
-        assert "OLD" in result
-        assert "NEW" in result
+        update_cache_from_ingest(ingest, cache_file)
+        assert get_cached_domain_id("OLD", cache_path=cache_file) == "old1"
+        assert get_cached_domain_id("NEW", cache_path=cache_file) == "new1"
 
     def test_update_no_domains_key(self, tmp_path):
         cache_file = tmp_path / "domains.json"
@@ -79,12 +75,45 @@ class TestGetCachedDomainId:
     def test_found(self, tmp_path):
         cache_file = tmp_path / "domains.json"
         save_cache({"APPDOM1": {"id": "d1"}}, cache_file)
-        assert get_cached_domain_id("APPDOM1", cache_file) == "d1"
+        assert get_cached_domain_id("APPDOM1", cache_path=cache_file) == "d1"
 
     def test_not_found(self, tmp_path):
         cache_file = tmp_path / "domains.json"
-        assert get_cached_domain_id("NOPE", cache_file) is None
+        assert get_cached_domain_id("NOPE", cache_path=cache_file) is None
 
     def test_not_found_no_file(self, tmp_path):
         cache_file = tmp_path / "nonexist.json"
-        assert get_cached_domain_id("NOPE", cache_file) is None
+        assert get_cached_domain_id("NOPE", cache_path=cache_file) is None
+
+    def test_composite_key_lookup(self, tmp_path):
+        cache_file = tmp_path / "domains.json"
+        ingest = {
+            "domains": [
+                {"id": "a1", "name": "IHDEV", "domain_type": "app", "node_id": "n1"},
+                {"id": "p1", "name": "IHDEV", "domain_type": "prcs", "node_id": "n1"},
+                {"id": "w1", "name": "IHDEV", "domain_type": "web", "node_id": "n1"},
+            ]
+        }
+        update_cache_from_ingest(ingest, cache_file)
+        assert get_cached_domain_id("IHDEV", domain_type="app", cache_path=cache_file) == "a1"
+        assert get_cached_domain_id("IHDEV", domain_type="prcs", cache_path=cache_file) == "p1"
+        assert get_cached_domain_id("IHDEV", domain_type="web", cache_path=cache_file) == "w1"
+
+    def test_ambiguous_without_type(self, tmp_path):
+        cache_file = tmp_path / "domains.json"
+        ingest = {
+            "domains": [
+                {"id": "a1", "name": "IHDEV", "domain_type": "app", "node_id": "n1"},
+                {"id": "p1", "name": "IHDEV", "domain_type": "prcs", "node_id": "n1"},
+            ]
+        }
+        update_cache_from_ingest(ingest, cache_file)
+        # No type given and multiple typed entries → ambiguous
+        assert get_cached_domain_id("IHDEV", cache_path=cache_file) is None
+
+    def test_legacy_flat_entry_still_works(self, tmp_path):
+        cache_file = tmp_path / "domains.json"
+        save_cache({"OLDDOM": {"id": "old1", "type": "app", "node_id": "n1"}}, cache_file)
+        assert get_cached_domain_id("OLDDOM", cache_path=cache_file) == "old1"
+        assert get_cached_domain_id("OLDDOM", domain_type="app", cache_path=cache_file) == "old1"
+        assert get_cached_domain_id("OLDDOM", domain_type="prcs", cache_path=cache_file) is None
