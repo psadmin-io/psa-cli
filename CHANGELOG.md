@@ -5,6 +5,16 @@ All notable changes to psa-cli are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `psa ops register [DOMAIN...]` — push locally-discovered domains to PSA-OPS. Idempotent (server upserts). Supports `--yes`, `--quiet`, `--verbose`, `--json`, and an optional positional list of domain names for subset registration.
+- `psa ops setup` now auto-registers discovered domains as a final step. Use `--skip-domains` to register the node only.
+
+### Changed
+- "Domain not found in PSA-OPS" errors (`psa domain compare --ops`, `psa ops set-env`, `psa ops compare`) now point users at `psa ops register`.
+- Moved `_apply_verbosity` from `psa.commands.domain` to `psa.core.output.apply_verbosity` for shared use across command modules.
+
 ## [0.3.0] — 2026-05-12
 
 **First public release.** psa-cli is now open source under the MIT license. This release collapses the un-tagged 0.2.1 through 0.2.5 development work into the first public cut.

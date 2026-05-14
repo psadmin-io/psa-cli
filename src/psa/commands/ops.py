@@ -1,5 +1,6 @@
 """PSA-OPS management commands."""
 
+import json
 from typing import List, Optional
 
 import typer
@@ -7,9 +8,17 @@ from rich.console import Console
 from rich.table import Table
 
 from psa.commands import init
-from psa.core.config import CONFIG_PATH, get_config
-from psa.core.domain_cache import get_cached_domain_id
-from psa.core.output import print_error, print_success
+from psa.core.config import CONFIG_PATH, PsaConfig, get_config
+from psa.core.domain import DomainDiscovery, DomainInfo
+from psa.core.domain_cache import get_cached_domain_id, update_cache_from_ingest
+from psa.core.output import (
+    apply_verbosity,
+    print_error,
+    print_info,
+    print_success,
+    print_warning,
+    run_step,
+)
 from psa.core.api import ApiClient, ApiError, get_hostname
 
 console = Console()
@@ -172,8 +181,129 @@ def _resolve_api_domain_id(client: ApiClient, name: str, node_id: Optional[str] 
         domains = [d for d in domains if d.get("domain_type") == domain_type]
     if not domains:
         print_error(f"Domain '{name}' not found in PSA-OPS")
+        print_info("Run 'psa ops register' to push locally-discovered domains to PSA-OPS")
         raise typer.Exit(1)
     return domains[0]["id"]
+
+
+def _discover_and_filter(names: Optional[List[str]]) -> List[DomainInfo]:
+    """Run discovery and optionally filter to a subset of domain names."""
+    config = get_config()
+    discovery = DomainDiscovery(config)
+    domains = discovery.discover_all()
+
+    if names:
+        by_name = {d.name: d for d in domains}
+        missing = [n for n in names if n not in by_name]
+        if missing:
+            print_error(f"Domain(s) not found locally: {', '.join(missing)}")
+            raise typer.Exit(1)
+        return [by_name[n] for n in names]
+
+    return domains
+
+
+def _register_domains(
+    config: PsaConfig,
+    client: ApiClient,
+    *,
+    names: Optional[List[str]] = None,
+    force: bool = False,
+    json_output: bool = False,
+) -> int:
+    """Discover local domains and push to PSA-OPS via ingest_scan.
+
+    Returns the number of domains registered. Idempotent — server upserts.
+    """
+    if json_output:
+        domains = _discover_and_filter(names)
+    else:
+        domains = run_step("Discovering domains", lambda: _discover_and_filter(names))
+
+    if not domains:
+        if not json_output:
+            print_warning("No domains found to register")
+        else:
+            console.print_json(json.dumps({"hostname": get_hostname(), "environment_id": config.ops.environment_id, "registered": []}))
+        return 0
+
+    if not force and not json_output:
+        table = Table(title="Register targets")
+        table.add_column("Name", style="cyan")
+        table.add_column("Type", style="magenta")
+        table.add_column("DB", style="dim")
+        for d in domains:
+            table.add_row(d.name, d.domain_type, (d.config or {}).get("db_name", "-"))
+        console.print(table)
+        if not typer.confirm(f"Register {len(domains)} domain(s) with PSA-OPS?", default=True):
+            raise typer.Abort()
+
+    hostname = get_hostname()
+
+    def _do_ingest() -> dict:
+        return client.ingest_scan(
+            hostname=hostname,
+            domains=[d.to_dict() for d in domains],
+            environment_id=config.ops.environment_id,
+        )
+
+    try:
+        if json_output:
+            result = _do_ingest()
+        else:
+            result = run_step("Registering domains", _do_ingest)
+    except ApiError as e:
+        print_error(f"Registration failed: {e}")
+        raise typer.Exit(1)
+
+    if result.get("domains"):
+        update_cache_from_ingest(result)
+
+    registered = result.get("domains", [])
+    if json_output:
+        console.print_json(json.dumps({
+            "hostname": hostname,
+            "environment_id": config.ops.environment_id,
+            "registered": [
+                {"name": d.get("name"), "id": d.get("id"), "domain_type": d.get("domain_type")}
+                for d in registered
+            ],
+        }))
+    else:
+        print_success(f"Registered {len(registered)} domain(s) with PSA-OPS")
+
+    return len(registered)
+
+
+@app.command(name="register")
+def register(
+    names: Optional[List[str]] = typer.Argument(None, help="Domain names (omit for all)"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress output except errors"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
+) -> None:
+    """
+    Push locally-discovered domains to PSA-OPS
+
+    Discovers domains on this node and registers them with PSA-OPS using the
+    node's anchor environment. Idempotent — re-running upserts.
+
+    Examples:
+        psa ops register                    # all discovered domains
+        psa ops register APPDOM             # just one
+        psa ops register APPDOM PRCSDOM     # subset
+        psa ops register --yes              # non-interactive
+    """
+    apply_verbosity(quiet, verbose)
+    config = get_config()
+
+    if not config.ops.is_configured():
+        print_error("PSA-OPS not configured. Run 'psa ops setup --url <url>' first")
+        raise typer.Exit(1)
+
+    client = ApiClient(config.ops.url)
+    _register_domains(config, client, names=names, force=yes, json_output=json_output)
 
 
 @app.command(name="set-env")
@@ -230,6 +360,7 @@ def _resolve_domain_id(client: ApiClient, name: str) -> str:
     domain = client.resolve_domain(name)
     if not domain:
         print_error(f"Domain '{name}' not found in PSA-OPS")
+        print_info("Run 'psa ops register' to push locally-discovered domains to PSA-OPS")
         raise typer.Exit(1)
     return domain["id"]
 

@@ -62,6 +62,7 @@ nav:
       - Overview: commands/index.md
       - domain: commands/domain.md
       - dpk: commands/dpk.md
+      - ops: commands/ops.md
       - config: commands/config.md
   - DPK workflow:
       - Provisioning workflow: dpk/provisioning-workflow.md

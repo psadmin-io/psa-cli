@@ -22,7 +22,7 @@ class TestOpsSetup:
         result = runner.invoke(psa_app, ["ops", "setup", "--url", "http://ops:8000", "--role", "app", "--yes"])
 
         mock_ops_mode.assert_called_once_with(
-            mock_config, "http://ops:8000", None, "app", True
+            mock_config, "http://ops:8000", None, "app", True, False
         )
 
     @patch("psa.commands.init._init_ops_mode")
@@ -40,7 +40,23 @@ class TestOpsSetup:
         ])
 
         mock_ops_mode.assert_called_once_with(
-            mock_config, "http://ops:8000", "env-123", "web", True
+            mock_config, "http://ops:8000", "env-123", "web", True, False
+        )
+
+    @patch("psa.commands.init._init_ops_mode")
+    @patch("psa.commands.init.get_config")
+    def test_ops_setup_skip_domains_flag(self, mock_get_config, mock_ops_mode):
+        mock_config = PsaConfig(ops=OpsConfig())
+        mock_get_config.return_value = mock_config
+
+        runner.invoke(psa_app, [
+            "ops", "setup",
+            "--url", "http://ops:8000",
+            "--role", "app", "--yes", "--skip-domains",
+        ])
+
+        mock_ops_mode.assert_called_once_with(
+            mock_config, "http://ops:8000", None, "app", True, True
         )
 
     def test_ops_setup_requires_url(self):

@@ -25,6 +25,7 @@ from psa.core.domain_cache import get_cached_domain_id, update_cache_from_ingest
 from psa.core.fileops import SudoFileOps
 from psa.core.output import (
     Verbosity,
+    apply_verbosity,
     console,
     get_verbosity,
     print_domains_table,
@@ -43,14 +44,6 @@ app = typer.Typer(
     help="Manage PeopleSoft domains",
     no_args_is_help=True,
 )
-
-
-def _apply_verbosity(quiet: bool, verbose: bool) -> None:
-    """Apply quiet/verbose flags (subcommand-level override)."""
-    if quiet is True:
-        set_verbosity(Verbosity.QUIET)
-    elif verbose is True:
-        set_verbosity(Verbosity.VERBOSE)
 
 
 def _find_domain(name: str, domain_type: Optional[str] = None) -> Optional[DomainInfo]:
@@ -294,7 +287,7 @@ def bounce(
         psa domain bounce              # bounce all domains
         psa domain bounce --type app   # bounce all app domains
     """
-    _apply_verbosity(quiet, verbose)
+    apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     if not _confirm_targets(domains, "bounce", all_mode=name is None, force=force):
         raise typer.Abort()
@@ -362,7 +355,7 @@ def configure(
         psa domain configure              # configure all (skips web)
         psa domain configure --type app   # configure all app domains
     """
-    _apply_verbosity(quiet, verbose)
+    apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type, skip_types={"web"} if name is None else None)
     if name is not None and domains[0].domain_type == "web":
         print_error("Configure not supported for web domains")
@@ -416,6 +409,7 @@ def _resolve_api_domain_id(client: ApiClient, name: str) -> str:
     domain = client.resolve_domain(name)
     if not domain:
         print_error(f"Domain '{name}' not found in PSA-OPS")
+        print_info("Run 'psa ops register' to push locally-discovered domains to PSA-OPS")
         raise typer.Exit(1)
     return domain["id"]
 
@@ -671,7 +665,7 @@ def compare(
         psa domain compare APPDOM --type psappsrv.cfg
         psa domain compare APPDOM --json
     """
-    _apply_verbosity(quiet, verbose)
+    apply_verbosity(quiet, verbose)
 
     # Validate mutual exclusion of --latest, --ops, --file
     exclusive_count = sum([latest, ops, file is not None])
@@ -825,7 +819,7 @@ def flush(
         psa domain flush              # flush all (skips web)
         psa domain flush --type app   # flush all app domains
     """
-    _apply_verbosity(quiet, verbose)
+    apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type, skip_types={"web"} if name is None else None)
     if name is not None and domains[0].domain_type == "web":
         print_warning("Flush not applicable for web domains")
@@ -872,7 +866,7 @@ def kill(
         psa domain kill              # kill all domains
         psa domain kill --type app   # kill all app domains
     """
-    _apply_verbosity(quiet, verbose)
+    apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     if not _confirm_targets(domains, "kill", all_mode=name is None, force=force):
         raise typer.Abort()
@@ -919,7 +913,7 @@ def list_domains(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed output"),
 ) -> None:
     """List all domains"""
-    _apply_verbosity(quiet, verbose)
+    apply_verbosity(quiet, verbose)
     config = get_config()
     domains = run_discovery(config, domain_type)
     domain_dicts = [d.to_dict() for d in domains]
@@ -986,7 +980,7 @@ def purge(
         psa domain purge              # purge all domains
         psa domain purge --type app   # purge all app domains
     """
-    _apply_verbosity(quiet, verbose)
+    apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     if not _confirm_targets(domains, "purge", all_mode=name is None, force=force):
         raise typer.Abort()
@@ -1042,7 +1036,7 @@ def restart(
         psa domain restart              # restart all domains
         psa domain restart --type app   # restart all app domains
     """
-    _apply_verbosity(quiet, verbose)
+    apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     if not _confirm_targets(domains, "restart", all_mode=name is None, force=force):
         raise typer.Abort()
@@ -1104,7 +1098,7 @@ def start(
         psa domain start              # start all domains
         psa domain start --type app   # start all app domains
     """
-    _apply_verbosity(quiet, verbose)
+    apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     if not _confirm_targets(domains, "start", all_mode=name is None, force=force):
         raise typer.Abort()
@@ -1171,7 +1165,7 @@ def status(
         psa domain status                  # Status of all domains
         psa domain status --type app       # Status of all app domains
     """
-    _apply_verbosity(quiet, verbose)
+    apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     # No confirmation for read-only status
 
@@ -1254,7 +1248,7 @@ def stop(
         psa domain stop              # stop all domains
         psa domain stop --type app   # stop all app domains
     """
-    _apply_verbosity(quiet, verbose)
+    apply_verbosity(quiet, verbose)
     domains = _resolve_targets(name, domain_type)
     if not _confirm_targets(domains, "stop", all_mode=name is None, force=force):
         raise typer.Abort()

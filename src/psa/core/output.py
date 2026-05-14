@@ -36,6 +36,14 @@ def set_verbosity(v: Verbosity) -> None:
     _verbosity = v
 
 
+def apply_verbosity(quiet: bool, verbose: bool) -> None:
+    """Apply quiet/verbose flags (subcommand-level override)."""
+    if quiet is True:
+        set_verbosity(Verbosity.QUIET)
+    elif verbose is True:
+        set_verbosity(Verbosity.VERBOSE)
+
+
 # --- Step runner ---
 
 

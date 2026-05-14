@@ -71,18 +71,25 @@ def ops_setup(
         "-y",
         help="Non-interactive mode, accept defaults",
     ),
+    skip_domains: bool = typer.Option(
+        False,
+        "--skip-domains",
+        help="Skip auto-registering domains after node setup",
+    ),
 ) -> None:
     """
     Connect psa to PSA-OPS
 
-    Registers this node with PSA-OPS and saves connection config.
+    Registers this node with PSA-OPS, then registers locally-discovered
+    domains. Use --skip-domains to register the node only.
 
     Examples:
         psa ops setup --url http://ops:8000
         psa ops setup --url http://ops:8000 --role app --yes
+        psa ops setup --url http://ops:8000 --skip-domains
     """
     config = get_config()
-    _init_ops_mode(config, url, environment_id, role, non_interactive)
+    _init_ops_mode(config, url, environment_id, role, non_interactive, skip_domains)
 
 
 def _detect_ps_paths_from_runtime_user(config, console) -> None:
@@ -188,6 +195,7 @@ def _init_ops_mode(
     environment_id: Optional[str],
     role: Optional[str],
     non_interactive: bool,
+    skip_domains: bool = False,
 ) -> None:
     """Initialize with PSA-OPS connection."""
     from psa.core.api import ApiClient, ApiError, get_hostname, get_ip_address
@@ -369,3 +377,17 @@ def _init_ops_mode(
     console.print(
         f"[green]✓[/green] Facts: pillar={pillar_str}, tier={tier_str}, zone={zone_str}, role={ps_role}"
     )
+
+    if skip_domains:
+        return
+
+    from psa.commands.ops import _register_domains
+    from psa.core.output import print_info, print_warning
+
+    console.print("\n[bold]Registering domains[/bold]")
+    try:
+        _register_domains(config, client, force=non_interactive, json_output=False)
+    except typer.Exit:
+        print_warning("Domain registration failed — run 'psa ops register' to retry")
+    except typer.Abort:
+        print_info("Domain registration skipped — run 'psa ops register' later")
