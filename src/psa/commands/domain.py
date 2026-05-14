@@ -168,7 +168,7 @@ def _execute_domain_command(
     return method(domain.name, domain.ps_cfg_home)
 
 
-def _report_status_to_api(name: str, status_str: str) -> None:
+def _report_status_to_api(name: str, domain_type: str, status_str: str) -> None:
     """Report domain status to PSA-OPS. Never fails the command."""
     status_map = {"running": "Running", "stopped": "Stopped"}
     api_status = status_map.get(status_str, "Unknown")
@@ -178,9 +178,9 @@ def _report_status_to_api(name: str, status_str: str) -> None:
         print_warning("PSA-OPS not configured; skipping report")
         return
 
-    domain_id = get_cached_domain_id(name)
+    domain_id = get_cached_domain_id(name, domain_type=domain_type)
     if not domain_id:
-        print_warning(f"No cached domain ID for '{name}'; run `psa ops report` first")
+        print_warning(f"No cached domain ID for '{name}' ({domain_type}); run `psa ops register` first")
         return
 
     try:
@@ -401,17 +401,30 @@ def configure(
         raise typer.Exit(1)
 
 
-def _resolve_api_domain_id(client: ApiClient, name: str) -> str:
+def _resolve_api_domain_id(
+    client: ApiClient,
+    name: str,
+    domain_type: Optional[str] = None,
+) -> str:
     """Resolve domain name to UUID via cache then PSA-OPS API."""
-    cached = get_cached_domain_id(name)
+    cached = get_cached_domain_id(name, domain_type=domain_type)
     if cached:
         return cached
-    domain = client.resolve_domain(name)
-    if not domain:
-        print_error(f"Domain '{name}' not found in PSA-OPS")
-        print_info("Run 'psa ops register' to push locally-discovered domains to PSA-OPS")
-        raise typer.Exit(1)
-    return domain["id"]
+    if domain_type:
+        candidates = client.list_domains(name=name)
+        candidates = [
+            d for d in candidates
+            if (d.get("type") or d.get("domain_type")) == domain_type
+        ]
+        if candidates:
+            return candidates[0]["id"]
+    else:
+        domain = client.resolve_domain(name)
+        if domain:
+            return domain["id"]
+    print_error(f"Domain '{name}' not found in PSA-OPS")
+    print_info("Run 'psa ops register' to push locally-discovered domains to PSA-OPS")
+    raise typer.Exit(1)
 
 
 def _resolve_config_path(domain: DomainInfo, config_name: str, fileops: SudoFileOps) -> Path:
@@ -482,7 +495,7 @@ def _compare_domain_ops(
 
     # Fetch Ops baseline
     client = ApiClient(config.ops.url)
-    domain_id = _resolve_api_domain_id(client, name)
+    domain_id = _resolve_api_domain_id(client, name, domain_type=domain.domain_type)
 
     # Push current config so API always has live server state
     if domain.config_files:
@@ -1203,7 +1216,7 @@ def status(
 
         if report:
             for domain, _, status_str in results:
-                _report_status_to_api(domain.name, status_str)
+                _report_status_to_api(domain.name, domain.domain_type, status_str)
         return
 
     # Single domain: original behavior
@@ -1224,7 +1237,7 @@ def status(
             console.print(f"[dim]{domain.name}[/dim]: [dim]unknown[/dim]")
 
     if report:
-        _report_status_to_api(domain.name, status_str)
+        _report_status_to_api(domain.name, domain.domain_type, status_str)
 
 
 @app.command("stop")
