@@ -111,6 +111,21 @@ class TestGetCachedDomainId:
         # No type given and multiple typed entries → ambiguous
         assert get_cached_domain_id("IHDEV", cache_path=cache_file) is None
 
+    def test_uppercase_server_type_lookup_with_lowercase(self, tmp_path):
+        """Server returns canonical uppercase (APP/PRCS/WEB); local lookups use lowercase."""
+        cache_file = tmp_path / "domains.json"
+        ingest = {
+            "domains": [
+                {"id": "a1", "name": "ihdev", "type": "APP", "node_id": "n1"},
+                {"id": "p1", "name": "ihdev", "type": "PRCS", "node_id": "n1"},
+                {"id": "w1", "name": "ihdev", "type": "WEB", "node_id": "n1"},
+            ]
+        }
+        update_cache_from_ingest(ingest, cache_file)
+        assert get_cached_domain_id("ihdev", domain_type="app", cache_path=cache_file) == "a1"
+        assert get_cached_domain_id("ihdev", domain_type="prcs", cache_path=cache_file) == "p1"
+        assert get_cached_domain_id("ihdev", domain_type="web", cache_path=cache_file) == "w1"
+
     def test_response_with_domain_type_field_still_works(self, tmp_path):
         """Defensive: server response using `domain_type` instead of `type` is accepted."""
         cache_file = tmp_path / "domains.json"

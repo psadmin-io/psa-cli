@@ -15,7 +15,10 @@ CACHE_PATH = Path.home() / ".config" / "psa" / "domains.json"
 
 
 def _composite_key(name: str, domain_type: Optional[str]) -> str:
-    return f"{name}:{domain_type}" if domain_type else name
+    """Compose a cache key. Domain type is normalized to lowercase so the
+    PSA-OPS canonical (uppercase: APP/PRCS/WEB) and local (lowercase) match.
+    """
+    return f"{name}:{domain_type.lower()}" if domain_type else name
 
 
 def load_cache(cache_path: Optional[Path] = None) -> dict:
@@ -52,7 +55,9 @@ def update_cache_from_ingest(ingest_result: dict, cache_path: Optional[Path] = N
         if not (name and domain_id):
             continue
         # PSA-OPS canonical field is `type`; accept `domain_type` defensively.
-        domain_type = domain.get("type") or domain.get("domain_type")
+        # Server returns canonical uppercase (APP/PRCS/WEB); normalize.
+        raw_type = domain.get("type") or domain.get("domain_type")
+        domain_type = raw_type.lower() if raw_type else None
         entry = {
             "id": domain_id,
             "node_id": domain.get("node_id"),
@@ -81,10 +86,12 @@ def get_cached_domain_id(
         entry = cache.get(_composite_key(name, domain_type))
         if entry:
             return entry.get("id")
-        # Legacy flat entry whose stored type matches
+        # Legacy flat entry whose stored type matches (case-insensitive).
         legacy = cache.get(name)
-        if legacy and legacy.get("type") == domain_type:
-            return legacy.get("id")
+        if legacy:
+            legacy_type = (legacy.get("type") or "").lower()
+            if legacy_type == domain_type.lower():
+                return legacy.get("id")
         return None
 
     # No type filter: prefer the flat key, else fall through to typed entries
