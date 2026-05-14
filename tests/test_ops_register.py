@@ -25,9 +25,9 @@ def _mk_domain(name: str, domain_type: str = "app", db_name: str = "HCMPRD") -> 
 
 MOCK_INGEST_RESULT = {
     "domains": [
-        {"name": "APPDOM", "id": "d1", "domain_type": "app"},
-        {"name": "PRCSDOM", "id": "d2", "domain_type": "prcs"},
-        {"name": "WEBDOM", "id": "d3", "domain_type": "web"},
+        {"name": "APPDOM", "id": "d1", "type": "app"},
+        {"name": "PRCSDOM", "id": "d2", "type": "prcs"},
+        {"name": "WEBDOM", "id": "d3", "type": "web"},
     ]
 }
 

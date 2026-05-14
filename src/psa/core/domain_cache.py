@@ -51,7 +51,8 @@ def update_cache_from_ingest(ingest_result: dict, cache_path: Optional[Path] = N
         domain_id = domain.get("id")
         if not (name and domain_id):
             continue
-        domain_type = domain.get("domain_type")
+        # PSA-OPS canonical field is `type`; accept `domain_type` defensively.
+        domain_type = domain.get("type") or domain.get("domain_type")
         entry = {
             "id": domain_id,
             "node_id": domain.get("node_id"),

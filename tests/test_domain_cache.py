@@ -42,8 +42,8 @@ class TestUpdateCacheFromIngest:
         cache_file = tmp_path / "domains.json"
         ingest = {
             "domains": [
-                {"id": "d1", "name": "APPDOM1", "domain_type": "app", "node_id": "n1"},
-                {"id": "d2", "name": "PRCSDOM1", "domain_type": "prcs", "node_id": "n1"},
+                {"id": "d1", "name": "APPDOM1", "type": "app", "node_id": "n1"},
+                {"id": "d2", "name": "PRCSDOM1", "type": "prcs", "node_id": "n1"},
             ]
         }
         update_cache_from_ingest(ingest, cache_file)
@@ -54,7 +54,7 @@ class TestUpdateCacheFromIngest:
         cache_file = tmp_path / "domains.json"
         save_cache({"OLD": {"id": "old1"}}, cache_file)
 
-        ingest = {"domains": [{"id": "new1", "name": "NEW", "domain_type": "app"}]}
+        ingest = {"domains": [{"id": "new1", "name": "NEW", "type": "app"}]}
         update_cache_from_ingest(ingest, cache_file)
         assert get_cached_domain_id("OLD", cache_path=cache_file) == "old1"
         assert get_cached_domain_id("NEW", cache_path=cache_file) == "new1"
@@ -89,9 +89,9 @@ class TestGetCachedDomainId:
         cache_file = tmp_path / "domains.json"
         ingest = {
             "domains": [
-                {"id": "a1", "name": "IHDEV", "domain_type": "app", "node_id": "n1"},
-                {"id": "p1", "name": "IHDEV", "domain_type": "prcs", "node_id": "n1"},
-                {"id": "w1", "name": "IHDEV", "domain_type": "web", "node_id": "n1"},
+                {"id": "a1", "name": "IHDEV", "type": "app", "node_id": "n1"},
+                {"id": "p1", "name": "IHDEV", "type": "prcs", "node_id": "n1"},
+                {"id": "w1", "name": "IHDEV", "type": "web", "node_id": "n1"},
             ]
         }
         update_cache_from_ingest(ingest, cache_file)
@@ -103,13 +103,26 @@ class TestGetCachedDomainId:
         cache_file = tmp_path / "domains.json"
         ingest = {
             "domains": [
-                {"id": "a1", "name": "IHDEV", "domain_type": "app", "node_id": "n1"},
-                {"id": "p1", "name": "IHDEV", "domain_type": "prcs", "node_id": "n1"},
+                {"id": "a1", "name": "IHDEV", "type": "app", "node_id": "n1"},
+                {"id": "p1", "name": "IHDEV", "type": "prcs", "node_id": "n1"},
             ]
         }
         update_cache_from_ingest(ingest, cache_file)
         # No type given and multiple typed entries → ambiguous
         assert get_cached_domain_id("IHDEV", cache_path=cache_file) is None
+
+    def test_response_with_domain_type_field_still_works(self, tmp_path):
+        """Defensive: server response using `domain_type` instead of `type` is accepted."""
+        cache_file = tmp_path / "domains.json"
+        ingest = {
+            "domains": [
+                {"id": "a1", "name": "IHDEV", "domain_type": "app", "node_id": "n1"},
+                {"id": "p1", "name": "IHDEV", "domain_type": "prcs", "node_id": "n1"},
+            ]
+        }
+        update_cache_from_ingest(ingest, cache_file)
+        assert get_cached_domain_id("IHDEV", domain_type="app", cache_path=cache_file) == "a1"
+        assert get_cached_domain_id("IHDEV", domain_type="prcs", cache_path=cache_file) == "p1"
 
     def test_legacy_flat_entry_still_works(self, tmp_path):
         cache_file = tmp_path / "domains.json"

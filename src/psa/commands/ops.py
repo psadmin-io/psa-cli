@@ -178,7 +178,7 @@ def _resolve_api_domain_id(client: ApiClient, name: str, node_id: Optional[str] 
         return cached
     domains = client.list_domains(name=name, node_id=node_id)
     if domain_type:
-        domains = [d for d in domains if d.get("domain_type") == domain_type]
+        domains = [d for d in domains if (d.get("type") or d.get("domain_type")) == domain_type]
     if not domains:
         print_error(f"Domain '{name}' not found in PSA-OPS")
         print_info("Run 'psa ops register' to push locally-discovered domains to PSA-OPS")
@@ -272,7 +272,7 @@ def _register_domains(
             "hostname": hostname,
             "environment_id": config.ops.environment_id,
             "registered": [
-                {"name": d.get("name"), "id": d.get("id"), "domain_type": d.get("domain_type")}
+                {"name": d.get("name"), "id": d.get("id"), "domain_type": d.get("type") or d.get("domain_type")}
                 for d in registered
             ],
         }))
