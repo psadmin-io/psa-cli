@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - "Domain not found in PSA-OPS" errors (`psa domain compare --ops`, `psa ops set-env`, `psa ops compare`) now point users at `psa ops register`.
 - Moved `_apply_verbosity` from `psa.commands.domain` to `psa.core.output.apply_verbosity` for shared use across command modules.
+- **Breaking:** `--type` on `psa domain compare` and `psa ops compare` now means **domain type** (`app`/`prcs`/`web`), consistent with the rest of the CLI. The flag previously meant config-file name. Use the new `--config`/`-c` flag to specify a config file (e.g. `--config psappsrv.cfg`). `--type app` now also auto-picks the primary config file for that type.
 
 ## [0.3.0] — 2026-05-12
 

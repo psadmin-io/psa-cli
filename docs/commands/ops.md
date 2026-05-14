@@ -65,11 +65,14 @@ Assigns an environment to a single domain. Resolves domain and environment by na
 
 ```bash
 psa ops compare APPDOM1 APPDOM2
-psa ops compare APPDOM1 APPDOM2 --type psappsrv.cfg
+psa ops compare ihlab ihdev --type app                        # disambiguate same-named domains
+psa ops compare ihlab ihdev --type app --config psworker.cfg  # override the auto-picked config
 psa ops compare APPDOM1 APPDOM2 APPDOM3 --all
 ```
 
 Fetches a config comparison from PSA-OPS for 2+ registered domains. Only `different` and `missing` rows shown by default; `--all` includes `same`.
+
+`--type` accepts `app` / `prcs` / `web` — it disambiguates same-named domains across types and auto-picks the primary config file for that type (`psappsrv.cfg` for app, `psprcs.cfg` for prcs, etc.). Override the auto-picked file with `--config`.
 
 ## Common flags
 

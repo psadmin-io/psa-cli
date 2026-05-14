@@ -359,17 +359,26 @@ def set_env(
         raise typer.Exit(1)
 
 
-def _resolve_domain_id(client: ApiClient, name: str) -> str:
+def _resolve_domain_id(client: ApiClient, name: str, domain_type: Optional[str] = None) -> str:
     """Resolve domain name to UUID. Checks local cache first, then PSA-OPS."""
-    cached = get_cached_domain_id(name)
+    cached = get_cached_domain_id(name, domain_type=domain_type)
     if cached:
         return cached
-    domain = client.resolve_domain(name)
-    if not domain:
-        print_error(f"Domain '{name}' not found in PSA-OPS")
-        print_info("Run 'psa ops register' to push locally-discovered domains to PSA-OPS")
-        raise typer.Exit(1)
-    return domain["id"]
+    if domain_type:
+        candidates = client.list_domains(name=name)
+        candidates = [
+            d for d in candidates
+            if (d.get("type") or d.get("domain_type") or "").lower() == domain_type.lower()
+        ]
+        if candidates:
+            return candidates[0]["id"]
+    else:
+        domain = client.resolve_domain(name)
+        if domain:
+            return domain["id"]
+    print_error(f"Domain '{name}' not found in PSA-OPS")
+    print_info("Run 'psa ops register' to push locally-discovered domains to PSA-OPS")
+    raise typer.Exit(1)
 
 
 @app.command(name="compare")
@@ -378,11 +387,17 @@ def compare(
         ...,
         help="Domain names to compare (at least 2)",
     ),
-    config_type: Optional[str] = typer.Option(
+    domain_type: Optional[str] = typer.Option(
         None,
         "--type",
         "-t",
-        help="Config file type (e.g. psappsrv.cfg, psprcs.cfg)",
+        help="Domain type (app, prcs, web) — disambiguates same-named domains and auto-picks the primary config",
+    ),
+    config_file: Optional[str] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Specific config file (default: primary for --type, e.g. psappsrv.cfg for app)",
     ),
     show_all: bool = typer.Option(
         False,
@@ -405,9 +420,12 @@ def compare(
 
     Examples:
         psa ops compare APPDOM1 APPDOM2
-        psa ops compare APPDOM1 APPDOM2 --type psappsrv.cfg
+        psa ops compare ihlab ihdev --type app
+        psa ops compare ihlab ihdev --type app --config psworker.cfg
         psa ops compare APPDOM1 APPDOM2 APPDOM3 --all
     """
+    from psa.core.compare import get_primary_config
+
     if len(domains) < 2:
         print_error("At least 2 domain names required for comparison")
         raise typer.Exit(1)
@@ -422,11 +440,14 @@ def compare(
     # Resolve names to UUIDs
     domain_ids = []
     for name in domains:
-        domain_id = _resolve_domain_id(client, name)
+        domain_id = _resolve_domain_id(client, name, domain_type=domain_type)
         domain_ids.append(domain_id)
 
+    # Pick config file: explicit --config wins, else infer from --type
+    resolved_config = config_file or (get_primary_config(domain_type) if domain_type else None)
+
     try:
-        result = client.compare_configs(domain_ids, config_type)
+        result = client.compare_configs(domain_ids, resolved_config)
     except ApiError as e:
         print_error(f"Compare failed: {e}")
         raise typer.Exit(1)

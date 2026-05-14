@@ -104,7 +104,7 @@ class TestOpsCompare:
         mock_api_cls.return_value = mock_client
         mock_client.compare_configs.return_value = {"rows": []}
 
-        result = runner.invoke(psa_app, ["ops", "compare", "A", "B", "--type", "psappsrv.cfg"])
+        result = runner.invoke(psa_app, ["ops", "compare", "A", "B", "--config", "psappsrv.cfg"])
         assert result.exit_code == 0
         mock_client.compare_configs.assert_called_once_with(["d1", "d2"], "psappsrv.cfg")
 

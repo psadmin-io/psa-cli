@@ -645,11 +645,17 @@ def compare(
         "--latest",
         help="Auto-pick newest archive backup (skip interactive picker)",
     ),
-    config_type: Optional[str] = typer.Option(
+    domain_type: Optional[str] = typer.Option(
         None,
         "--type",
         "-t",
-        help="Config type (default: primary for domain type)",
+        help="Domain type (app, prcs, web) — disambiguates same-named domains",
+    ),
+    config_file: Optional[str] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Specific config file (default: primary for domain type, e.g. psappsrv.cfg for app)",
     ),
     json_output: bool = typer.Option(
         False,
@@ -668,14 +674,18 @@ def compare(
     Use --ops to compare against last PSA-OPS capture.
     Use --file to compare against an arbitrary file.
 
+    The config file is auto-picked from the domain type (psappsrv.cfg for
+    app, psprcs.cfg for prcs, etc.). Override with --config when needed.
+
     Examples:
         psa domain compare APPDOM
         psa domain compare APPDOM --latest
         psa domain compare APPDOM --ops
-        psa domain compare --ops              # all domains vs Ops
-        psa domain compare --ops --commit     # commit all without prompting
+        psa domain compare ihlab --type prcs           # disambiguate same-named domain
+        psa domain compare ihlab --type app --config psworker.cfg
+        psa domain compare --ops                       # all domains vs Ops
+        psa domain compare --ops --commit              # commit all without prompting
         psa domain compare APPDOM --file /path/to/old.cfg
-        psa domain compare APPDOM --type psappsrv.cfg
         psa domain compare APPDOM --json
     """
     apply_verbosity(quiet, verbose)
@@ -693,14 +703,14 @@ def compare(
             print_error("PSA-OPS not configured. Run 'psa ops setup --url <url>' first")
             raise typer.Exit(1)
 
-        domains = _resolve_targets(name)
+        domains = _resolve_targets(name, domain_type=domain_type)
         for domain in domains:
             ok = _compare_domain_ops(
                 domain,
                 config,
                 commit=commit or json_output,
                 json_output=json_output,
-                config_type=config_type,
+                config_type=config_file,
             )
             if not ok:
                 raise typer.Exit(1)
@@ -711,14 +721,14 @@ def compare(
         print_error("Domain name required for archive/file compare. Use --ops for all domains.")
         raise typer.Exit(1)
 
-    # 1. Find domain locally
-    domain = _find_domain(name)
+    # 1. Find domain locally (--type disambiguates same-named domains)
+    domain = _find_domain(name, domain_type)
     if not domain:
         print_error(f"Domain '{name}' not found")
         raise typer.Exit(1)
 
-    # 2. Determine config type
-    config_name = config_type or get_primary_config(domain.domain_type)
+    # 2. Determine config file
+    config_name = config_file or get_primary_config(domain.domain_type)
 
     # 3. Read + parse current config
     config = get_config()
